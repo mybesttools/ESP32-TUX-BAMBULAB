@@ -74,6 +74,7 @@ typedef struct {
     string token;
     string serial;  // Printer serial number from MQTT
     bool enabled;
+    bool disable_ssl_verify;  // Skip SSL certificate verification (less secure, but simpler)
 } printer_config_t;
 
 // Weather location configuration structure

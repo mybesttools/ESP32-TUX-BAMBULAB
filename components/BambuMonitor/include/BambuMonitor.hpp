@@ -33,6 +33,8 @@ typedef struct {
     char* ip_address;
     uint16_t port;
     char* access_code;
+    char* tls_certificate;  // PEM-format TLS certificate (optional if disable_ssl_verify=true)
+    bool disable_ssl_verify;  // Skip SSL certificate verification (less secure, easier setup)
 } bambu_printer_config_t;
 
 /**
@@ -71,6 +73,22 @@ cJSON* bambu_get_status_json(void);
  * @return ESP_OK on success
  */
 esp_err_t bambu_register_event_handler(esp_event_handler_t handler);
+
+/**
+ * @brief Start MQTT connection (call after WiFi is connected)
+ * 
+ * @return ESP_OK on success
+ */
+esp_err_t bambu_monitor_start_mqtt(void);
+
+/**
+ * @brief Fetch TLS certificate from printer
+ * 
+ * @param ip_address Printer IP address
+ * @param port TLS port (typically 8883)
+ * @return Allocated PEM certificate string (caller must free) or NULL on failure
+ */
+char* bambu_fetch_tls_certificate(const char* ip_address, uint16_t port);
 
 #ifdef __cplusplus
 }

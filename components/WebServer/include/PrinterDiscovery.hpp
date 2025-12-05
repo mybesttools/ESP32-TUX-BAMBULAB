@@ -18,6 +18,9 @@ typedef struct mdns_result_s mdns_result_t;
 // Progress callback type: (current, total) -> void
 typedef std::function<void(int, int)> ProgressCallback;
 
+// Printer found callback type: (ip_address) -> void
+typedef std::function<void(const std::string&)> PrinterFoundCallback;
+
 class PrinterDiscovery {
 public:
     struct PrinterInfo {
@@ -39,10 +42,17 @@ public:
         std::string wifi_signal;
         int print_error;
         std::string model_id;
+        std::string tls_certificate;    // PEM-format TLS cert (fetched during config)
     };
     
     PrinterDiscovery();
     ~PrinterDiscovery();
+    
+    /**
+     * Set a global callback to be notified when printers are found during discovery
+     * This allows real-time updates to UI
+     */
+    static void set_printer_found_callback(PrinterFoundCallback cb);
     
     /**
      * Discover Bambu Lab printers on the network
@@ -94,6 +104,7 @@ public:
 
 private:
     static const char *TAG;
+    static PrinterFoundCallback s_printer_found_callback;
     
     std::string extract_model_from_hostname(const std::string &hostname);
     
