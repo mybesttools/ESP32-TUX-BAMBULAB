@@ -459,7 +459,7 @@ static void tux_panel_clock_weather(lv_obj_t *parent)
 
     // MSG - MSG_TIME_CHANGED - EVENT
     lv_obj_add_event_cb(cont_datetime, datetime_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
-    lv_msg_subsribe_obj(MSG_TIME_CHANGED, cont_datetime, NULL);
+    lv_msg_subscribe_obj(MSG_TIME_CHANGED, cont_datetime, NULL);
 
     // Time
     lbl_time = lv_label_create(cont_datetime);
@@ -491,7 +491,7 @@ static void tux_panel_clock_weather(lv_obj_t *parent)
 
     // MSG - MSG_WEATHER_CHANGED - EVENT
     lv_obj_add_event_cb(cont_weather, weather_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
-    lv_msg_subsribe_obj(MSG_WEATHER_CHANGED, cont_weather, NULL);
+    lv_msg_subscribe_obj(MSG_WEATHER_CHANGED, cont_weather, NULL);
 
     // This only for landscape
     // lv_obj_t *lbl_unit = lv_label_create(cont_weather);
@@ -876,9 +876,9 @@ static void create_page_bambu(lv_obj_t *parent)
     lv_label_set_text(lbl_temps, "Bed: -- Nozzle: --");
     
     // Subscribe to Bambu messages
-    lv_msg_subsribe(MSG_BAMBU_STATUS, bambu_status_cb, lbl_status);
-    lv_msg_subsribe(MSG_BAMBU_PROGRESS, bambu_progress_cb, lbl_progress);
-    lv_msg_subsribe(MSG_BAMBU_TEMPS, bambu_temps_cb, lbl_temps);
+    lv_msg_subscribe(MSG_BAMBU_STATUS, bambu_status_cb, lbl_status);
+    lv_msg_subscribe(MSG_BAMBU_PROGRESS, bambu_progress_cb, lbl_progress);
+    lv_msg_subscribe(MSG_BAMBU_TEMPS, bambu_temps_cb, lbl_temps);
 }
 
 static void create_splash_screen()
@@ -952,13 +952,13 @@ static void show_ui()
     lv_scr_load_anim(screen_container, LV_SCR_LOAD_ANIM_FADE_IN, 1000,100, true);
 
     // Status subscribers
-    lv_msg_subsribe(MSG_WIFI_PROV_MODE, status_change_cb, NULL);    
-    lv_msg_subsribe(MSG_WIFI_CONNECTED, status_change_cb, NULL);    
-    lv_msg_subsribe(MSG_WIFI_DISCONNECTED, status_change_cb, NULL);    
-    lv_msg_subsribe(MSG_OTA_STATUS, status_change_cb, NULL);    
-    lv_msg_subsribe(MSG_SDCARD_STATUS, status_change_cb, NULL);  
-    lv_msg_subsribe(MSG_BATTERY_STATUS, status_change_cb, NULL);  
-    lv_msg_subsribe(MSG_DEVICE_INFO, status_change_cb, NULL);      
+    lv_msg_subscribe(MSG_WIFI_PROV_MODE, status_change_cb, NULL);    
+    lv_msg_subscribe(MSG_WIFI_CONNECTED, status_change_cb, NULL);    
+    lv_msg_subscribe(MSG_WIFI_DISCONNECTED, status_change_cb, NULL);    
+    lv_msg_subscribe(MSG_OTA_STATUS, status_change_cb, NULL);    
+    lv_msg_subscribe(MSG_SDCARD_STATUS, status_change_cb, NULL);  
+    lv_msg_subscribe(MSG_BATTERY_STATUS, status_change_cb, NULL);  
+    lv_msg_subscribe(MSG_DEVICE_INFO, status_change_cb, NULL);      
 
     // Send default page load notification => HOME
     lv_msg_send(MSG_PAGE_HOME,NULL);

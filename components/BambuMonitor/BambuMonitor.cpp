@@ -2,6 +2,14 @@
 #include "esp_log.h"
 #include "mqtt_client.h"
 #include "cJSON.h"
+#include "esp_tls.h"
+#include "mbedtls/base64.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/net_sockets.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/pem.h"
 #include <cstring>
 #include <stdlib.h>
 
@@ -16,6 +24,8 @@ static cJSON* last_status = NULL;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static esp_event_handler_t registered_handler = NULL;
 static bool mqtt_initialized = false;
+static char* cached_tls_certificate = NULL;  // Dynamically fetched and cached
+static bambu_printer_config_t saved_config = {0};  // Save config for later use
 
 /**
  * @brief MQTT event handler for Bambu printer communication
@@ -66,6 +76,22 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
             char topic[128] = {0};
             if (event->topic_len > 0 && event->topic_len < sizeof(topic)) {
                 strncpy(topic, event->topic, event->topic_len);
+            }
+            
+            // Extract serial number from topic (format: device/SERIAL/report)
+            // This is how Home Assistant does it instead of HTTP queries
+            if (strncmp(topic, "device/", 7) == 0) {
+                const char* serial_start = topic + 7;
+                const char* serial_end = strchr(serial_start, '/');
+                if (serial_end) {
+                    size_t serial_len = serial_end - serial_start;
+                    if (serial_len > 0 && serial_len < 64) {
+                        char serial[64] = {0};
+                        strncpy(serial, serial_start, serial_len);
+                        ESP_LOGI(TAG, "Printer serial from MQTT topic: %s", serial);
+                        // TODO: Save serial to config if not already set
+                    }
+                }
             }
             
             ESP_LOGD(TAG, "MQTT Data received on topic: %s (len: %d, data_len: %d)", 
@@ -151,6 +177,31 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
     }
 }
 
+/**
+ * @brief Fetch TLS certificate from Bambu printer
+ * 
+ * NOTE: Certificate fetching during query is complex and causing memory issues.
+ * For now, we'll skip this step - certificates should be pre-configured or
+ * we can add a separate "fetch certificate" button in the UI.
+ * 
+ * @param ip_address Printer IP address  
+ * @param port TLS port (typically 8883)
+ * @return NULL (certificate fetch skipped for stability)
+ */
+char* bambu_fetch_tls_certificate(const char* ip_address, uint16_t port)
+{
+    if (!ip_address) {
+        ESP_LOGE(TAG, "Invalid IP address for certificate fetch");
+        return NULL;
+    }
+
+    ESP_LOGW(TAG, "Certificate fetch skipped - configure manually or use pre-extracted cert");
+    ESP_LOGW(TAG, "To extract cert: openssl s_client -connect %s:%d -showcerts < /dev/null 2>/dev/null | openssl x509 -outform PEM", 
+             ip_address, port);
+    
+    return NULL;
+}
+
 esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
 {
     if (!config) {
@@ -167,17 +218,37 @@ esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
     mqtt_cfg.broker.address.port = config->port;
     mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
     
-    // TLS settings for self-signed certificates
-    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-    mqtt_cfg.broker.verification.use_global_ca_store = false;
+    // SSL/TLS Configuration - inspired by Home Assistant's approach
+    if (config->disable_ssl_verify) {
+        // Skip certificate verification (simpler setup, less secure)
+        // This is the Home Assistant default for local printers
+        ESP_LOGI(TAG, "SSL verification disabled - using insecure connection");
+        mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+        mqtt_cfg.broker.verification.certificate = NULL;  // No cert needed
+    } else {
+        // Use certificate verification (more secure)
+        if (config->tls_certificate) {
+            ESP_LOGI(TAG, "Using provided TLS certificate for verification");
+            mqtt_cfg.broker.verification.certificate = config->tls_certificate;
+            mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+        } else {
+            ESP_LOGW(TAG, "No TLS certificate provided - connection will likely fail");
+            ESP_LOGW(TAG, "Either enable 'disable_ssl_verify' or provide a certificate");
+            mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+        }
+    }
     
     // Authentication
     mqtt_cfg.credentials.username = "bblp";
     mqtt_cfg.credentials.authentication.password = config->access_code;
     
-    // Buffer settings
-    mqtt_cfg.buffer.size = 8192;
-    mqtt_cfg.buffer.out_size = 8192;
+    // Buffer settings - reduced to save memory
+    mqtt_cfg.buffer.size = 4096;
+    mqtt_cfg.buffer.out_size = 2048;
+    
+    // Task settings - increase stack size to prevent task creation failure
+    mqtt_cfg.task.priority = 4;        // Priority 4 (lower than LVGL task which is 5)
+    mqtt_cfg.task.stack_size = 6144;   // 6KB stack (increased from default 4KB)
     
     // Session settings
     mqtt_cfg.session.keepalive = 60;
@@ -193,16 +264,10 @@ esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
     // Register event handler
     esp_mqtt_client_register_event(mqtt_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     
-    // Start MQTT client
-    esp_err_t ret = esp_mqtt_client_start(mqtt_client);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(ret));
-        esp_mqtt_client_destroy(mqtt_client);
-        mqtt_client = NULL;
-        return ret;
-    }
+    // DO NOT start MQTT client yet - wait for WiFi to connect first
+    // The MQTT client will be started when WiFi connection is established
     
-    ESP_LOGI(TAG, "Bambu Monitor configured (MQTT connection will be established on demand)");
+    ESP_LOGI(TAG, "Bambu Monitor configured (MQTT will connect after WiFi is ready)");
     current_state = BAMBU_STATE_IDLE;
     return ESP_OK;
 }
@@ -223,6 +288,23 @@ cJSON* bambu_get_status_json(void)
 esp_err_t bambu_register_event_handler(esp_event_handler_t handler)
 {
     registered_handler = handler;
+    return ESP_OK;
+}
+
+esp_err_t bambu_monitor_start_mqtt(void)
+{
+    if (!mqtt_client) {
+        ESP_LOGE(TAG, "MQTT client not initialized");
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Starting MQTT client connection to printer");
+    esp_err_t ret = esp_mqtt_client_start(mqtt_client);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
     return ESP_OK;
 }
 

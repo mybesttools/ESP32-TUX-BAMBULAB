@@ -5,6 +5,7 @@
 
 #include "PrinterDiscovery.hpp"
 #include "SettingsConfig.hpp"
+#include "../BambuMonitor/include/BambuMonitor.hpp"
 #include <cstring>
 #include <esp_err.h>
 #include <esp_log.h>
@@ -25,12 +26,17 @@
 
 extern SettingsConfig *cfg;
 
-const char *PrinterDiscovery::TAG = "PrinterDiscovery";
+const char* PrinterDiscovery::TAG = "PrinterDiscovery";
+PrinterFoundCallback PrinterDiscovery::s_printer_found_callback = nullptr;
 
 PrinterDiscovery::PrinterDiscovery() {
 }
 
 PrinterDiscovery::~PrinterDiscovery() {
+}
+
+void PrinterDiscovery::set_printer_found_callback(PrinterFoundCallback cb) {
+    s_printer_found_callback = cb;
 }
 
 std::string PrinterDiscovery::extract_model_from_hostname(const std::string &hostname) {
@@ -137,6 +143,11 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::scan_subnet(const s
             discovered.push_back(info);
             found_count++;
             ESP_LOGI(TAG, "✓ Found printer at: %s", ip.c_str());
+            
+            // Notify static callback immediately
+            if (s_printer_found_callback) {
+                s_printer_found_callback(ip);
+            }
         } else {
             ESP_LOGD(TAG, "✗ No printer at: %s", ip.c_str());
         }
@@ -392,11 +403,18 @@ PrinterDiscovery::PrinterStatus PrinterDiscovery::query_printer_status(const std
         return status;
     }
     
-    // For now, return a placeholder indicating the feature is in development
-    // Full MQTT client implementation coming soon  
-    status.serial = "MQTT_QUERY_PENDING";
-    status.state = "INITIALIZING";
+    ESP_LOGI(TAG, "✓ Printer reachable at %s:8883", ip.c_str());
     
-    ESP_LOGW(TAG, "MQTT query returns placeholder (development in progress)");
+    // Certificate fetch is currently disabled due to memory constraints
+    // Users should extract certificate manually using:
+    // openssl s_client -connect IP:8883 -showcerts < /dev/null 2>/dev/null | openssl x509 -outform PEM
+    ESP_LOGW(TAG, "Certificate auto-fetch disabled - manual extraction required");
+    
+    // For now, return serial from device ID if available in config
+    // Or use a placeholder to indicate MQTT query would be needed
+    status.serial = "CERT_REQUIRED";
+    status.state = "NEEDS_SETUP";
+    
+    ESP_LOGI(TAG, "Serial/cert extraction via MQTT requires pre-configured certificate");
     return status;
 }

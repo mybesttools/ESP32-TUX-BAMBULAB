@@ -30,6 +30,7 @@ std::vector<std::string> WebServer::g_discovered_ips;
 bool WebServer::g_discovery_in_progress = false;
 int WebServer::g_discovery_progress = 0;
 TaskHandle_t WebServer::g_discovery_task = nullptr;
+static SemaphoreHandle_t g_discovered_ips_mutex = nullptr;
 
 // HTML page served at root
 static const char *HTML_PAGE = R"rawliteral(
@@ -185,21 +186,28 @@ static const char *HTML_PAGE = R"rawliteral(
             
             <h3>Add Printer Manually</h3>
             <label>Printer Name:</label>
-            <input type="text" id="printerName" placeholder="e.g., Bambu Lab X1">
+            <input type="text" id="printerName" placeholder="e.g., Bambu Lab X1" oninput="validatePrinterForm()">
             
             <label>IP Address:</label>
-            <input type="text" id="printerIP" placeholder="192.168.1.100">
+            <input type="text" id="printerIP" placeholder="192.168.1.100" oninput="validatePrinterForm()">
             
             <label>Printer Code:</label>
-            <form onsubmit="return false;">
-            <input type="password" id="printerToken" placeholder="Enter printer API token" onchange="fetchPrinterSerial()">
-            </form>
+            <input type="password" id="printerToken" placeholder="Enter printer access code" oninput="validatePrinterForm()">
+            
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="disableSslVerify" checked>
+                <span>Disable SSL verification (recommended for easier setup)</span>
+            </label>
+            <p style="font-size: 11px; color: #aaa; margin: -5px 0 10px 28px;">⚠️ Disabling SSL verification is less secure but avoids certificate setup. Only use on trusted networks.</p>
             
             <label>Serial Number:</label>
-            <input type="text" id="printerSerial" placeholder="Auto-fetched from printer" readonly>
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="printerSerial" placeholder="Click Fetch to retrieve" readonly style="flex: 1;">
+                <button id="fetchSerialBtn" onclick="fetchPrinterSerial()" disabled>🔍 Fetch Serial</button>
+            </div>
             
             <div class="button-group">
-                <button onclick="addPrinter()">➕ Add Printer</button>
+                <button id="addPrinterBtn" onclick="addPrinter()" disabled>➕ Add Printer</button>
             </div>
             
             <h3>Configured Printers</h3>
@@ -494,8 +502,24 @@ static const char *HTML_PAGE = R"rawliteral(
                 document.getElementById('printerName').value = printer.hostname;
                 document.getElementById('printerIP').value = printer.ip_address;
                 document.getElementById('printerSerial').value = '';
-                showStatus('printerStatus', 'Printer selected. Add token to fetch serial.', true);
+                validatePrinterForm(); // Update button states
+                showStatus('printerStatus', 'Printer selected. Add code and click Fetch Serial.', true);
             }
+        }
+        
+        function validatePrinterForm() {
+            const name = document.getElementById('printerName').value.trim();
+            const ip = document.getElementById('printerIP').value.trim();
+            const token = document.getElementById('printerToken').value.trim();
+            const serial = document.getElementById('printerSerial').value.trim();
+            
+            // Enable Fetch Serial button if IP and token are filled
+            const fetchBtn = document.getElementById('fetchSerialBtn');
+            fetchBtn.disabled = !(ip && token);
+            
+            // Enable Add Printer button only if all fields are filled
+            const addBtn = document.getElementById('addPrinterBtn');
+            addBtn.disabled = !(name && ip && token && serial);
         }
         
         function fetchPrinterSerial() {
@@ -507,37 +531,36 @@ static const char *HTML_PAGE = R"rawliteral(
                 return;
             }
             
-            showStatus('printerStatus', 'Fetching serial from printer...', true);
+            const statusElem = document.getElementById('printerStatus');
+            statusElem.textContent = '🔒 Fetching TLS certificate...';
+            statusElem.className = 'status success';
+            document.getElementById('fetchSerialBtn').disabled = true;
             
-            // Attempt to fetch serial from printer MQTT endpoint
-            // The format is: http://IP/api/v1/info with Authorization header
-            fetch(`http://${ip}/api/v1/info`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(r => {
-                if (r.status === 401 || r.status === 403) {
-                    showStatus('printerStatus', 'Token invalid or insufficient permissions', false);
-                    return Promise.reject('Authorization failed');
-                }
-                return r.json();
-            })
-            .then(d => {
-                // Extract serial from response - could be in different fields depending on API
-                const serial = d.serial || d.device_id || d.sn || '';
-                if (serial) {
-                    document.getElementById('printerSerial').value = serial;
-                    showStatus('printerStatus', 'Serial fetched successfully!', true);
-                } else {
-                    showStatus('printerStatus', 'Could not find serial in response. Enter manually.', false);
-                }
-            })
-            .catch(e => {
-                showStatus('printerStatus', 'Could not fetch serial: ' + e, false);
-            });
+            // Small delay to show certificate fetch message
+            setTimeout(() => {
+                statusElem.textContent = '📡 Querying printer via MQTT...';
+                
+                // Call our ESP32 backend to query the printer via MQTT
+                fetch(apiBase + `/api/printer/query?ip=${encodeURIComponent(ip)}&code=${encodeURIComponent(token)}`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success && d.serial) {
+                        document.getElementById('printerSerial').value = d.serial;
+                        statusElem.textContent = '✓ Serial and TLS certificate fetched successfully!';
+                        statusElem.className = 'status success';
+                        validatePrinterForm(); // Re-check if Add Printer should be enabled
+                    } else {
+                        statusElem.textContent = 'Error: ' + (d.error || 'Could not fetch serial');
+                        statusElem.className = 'status error';
+                        document.getElementById('fetchSerialBtn').disabled = false;
+                    }
+                })
+                .catch(e => {
+                    statusElem.textContent = 'Could not fetch serial: ' + e;
+                    statusElem.className = 'status error';
+                    document.getElementById('fetchSerialBtn').disabled = false;
+                });
+            }, 100);
         }
         
         function addPrinter() {
@@ -545,7 +568,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 name: document.getElementById('printerName').value,
                 ip: document.getElementById('printerIP').value,
                 token: document.getElementById('printerToken').value,
-                serial: document.getElementById('printerSerial').value
+                serial: document.getElementById('printerSerial').value,
+                disable_ssl_verify: document.getElementById('disableSslVerify').checked
             };
             
             if (!data.name || !data.ip || !data.token) {
@@ -566,6 +590,7 @@ static const char *HTML_PAGE = R"rawliteral(
                     document.getElementById('printerIP').value = '';
                     document.getElementById('printerToken').value = '';
                     document.getElementById('printerSerial').value = '';
+                    validatePrinterForm(); // Disable buttons after clearing
                     loadPrinters();
                 }
             })
@@ -582,7 +607,9 @@ static const char *HTML_PAGE = R"rawliteral(
                     d.printers.forEach((p, i) => {
                         const item = document.createElement('li');
                         item.className = 'printer-item';
-                        item.innerHTML = `<strong>${p.name}</strong> - ${p.ip} 
+                        const sslStatus = p.disable_ssl_verify ? '🔓' : '🔒';
+                        const sslTooltip = p.disable_ssl_verify ? 'SSL verification disabled' : 'SSL verification enabled';
+                        item.innerHTML = `<strong>${p.name}</strong> - ${p.ip} <span title="${sslTooltip}">${sslStatus}</span>
                                          <button onclick="removePrinter(${i})" style="float:right">❌</button>`;
                         list.appendChild(item);
                     });
@@ -700,6 +727,9 @@ static const char *HTML_PAGE = R"rawliteral(
 // Root handler
 esp_err_t WebServer::handle_root(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_set_hdr(req, "Pragma", "no-cache");
+    httpd_resp_set_hdr(req, "Expires", "0");
     return httpd_resp_send(req, HTML_PAGE, strlen(HTML_PAGE));
 }
 
@@ -933,6 +963,7 @@ esp_err_t WebServer::handle_api_printers_get(httpd_req_t *req) {
         cJSON_AddStringToObject(printer_obj, "name", printer.name.c_str());
         cJSON_AddStringToObject(printer_obj, "ip", printer.ip_address.c_str());
         cJSON_AddStringToObject(printer_obj, "serial", printer.serial.c_str());
+        cJSON_AddBoolToObject(printer_obj, "disable_ssl_verify", printer.disable_ssl_verify);
         cJSON_AddItemToArray(printers_array, printer_obj);
     }
     
@@ -967,11 +998,25 @@ esp_err_t WebServer::handle_api_printers_post(httpd_req_t *req) {
     const char *serial = cJSON_GetObjectItem(data, "serial") ? 
                         cJSON_GetObjectItem(data, "serial")->valuestring : "";
     
+    // Get disable_ssl_verify (defaults to true for easier setup)
+    cJSON *ssl_verify_item = cJSON_GetObjectItem(data, "disable_ssl_verify");
+    bool disable_ssl_verify = ssl_verify_item ? cJSON_IsTrue(ssl_verify_item) : true;
+    
     if (name && ip && token) {
         cfg->add_printer(name, ip, token, serial ? serial : "");
+        
+        // Update the last added printer's SSL setting
+        if (cfg->get_printer_count() > 0) {
+            int last_index = cfg->get_printer_count() - 1;
+            printer_config_t printer = cfg->get_printer(last_index);
+            printer.disable_ssl_verify = disable_ssl_verify;
+            cfg->PrinterList[last_index] = printer;
+        }
+        
         cfg->save_config();
         
-        ESP_LOGI(TAG, "Printer added: %s at %s (serial: %s)", name, ip, serial ? serial : "");
+        ESP_LOGI(TAG, "Printer added: %s at %s (serial: %s, SSL verify: %s)", 
+                 name, ip, serial ? serial : "", disable_ssl_verify ? "disabled" : "enabled");
         
         cJSON *response = cJSON_CreateObject();
         cJSON_AddBoolToObject(response, "success", true);
@@ -1087,17 +1132,24 @@ esp_err_t WebServer::handle_api_printers_discover_status(httpd_req_t *req) {
     cJSON_AddBoolToObject(root, "in_progress", g_discovery_in_progress);
     cJSON_AddNumberToObject(root, "progress", g_discovery_progress);
     
-    // Add discovered printers
+    // Add discovered printers with mutex protection
     cJSON *printers_array = cJSON_CreateArray();
-    for (const auto &ip : g_discovered_ips) {
-        cJSON *printer_obj = cJSON_CreateObject();
-        cJSON_AddStringToObject(printer_obj, "hostname", "Bambu Lab Printer");
-        cJSON_AddStringToObject(printer_obj, "ip_address", ip.c_str());
-        cJSON_AddStringToObject(printer_obj, "model", "Unknown");
-        cJSON_AddItemToArray(printers_array, printer_obj);
+    int count = 0;
+    
+    if (g_discovered_ips_mutex && xSemaphoreTake(g_discovered_ips_mutex, pdMS_TO_TICKS(100))) {
+        for (const auto &ip : g_discovered_ips) {
+            cJSON *printer_obj = cJSON_CreateObject();
+            cJSON_AddStringToObject(printer_obj, "hostname", "Bambu Lab Printer");
+            cJSON_AddStringToObject(printer_obj, "ip_address", ip.c_str());
+            cJSON_AddStringToObject(printer_obj, "model", "Unknown");
+            cJSON_AddItemToArray(printers_array, printer_obj);
+        }
+        count = g_discovered_ips.size();
+        xSemaphoreGive(g_discovered_ips_mutex);
     }
+    
     cJSON_AddItemToObject(root, "discovered", printers_array);
-    cJSON_AddNumberToObject(root, "count", (int)g_discovered_ips.size());
+    cJSON_AddNumberToObject(root, "count", count);
     
     char *json_str = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");
@@ -1544,7 +1596,11 @@ esp_err_t WebServer::handle_api_networks_delete(httpd_req_t *req) {
     return err;
 }
 
-WebServer::WebServer() : server(nullptr) {}
+WebServer::WebServer() : server(nullptr) {
+    if (g_discovered_ips_mutex == nullptr) {
+        g_discovered_ips_mutex = xSemaphoreCreateMutex();
+    }
+}
 
 WebServer::~WebServer() {
     stop();
@@ -1562,7 +1618,12 @@ void WebServer::discovery_task_handler(void *pvParameter) {
     
     g_discovery_in_progress = true;
     g_discovery_progress = 0;
-    g_discovered_ips.clear();
+    
+    // Clear discovered IPs with mutex protection
+    if (g_discovered_ips_mutex && xSemaphoreTake(g_discovered_ips_mutex, portMAX_DELAY)) {
+        g_discovered_ips.clear();
+        xSemaphoreGive(g_discovered_ips_mutex);
+    }
     
     // Create lambda to update progress
     auto progress_callback = [](int current, int total) {
@@ -1570,21 +1631,37 @@ void WebServer::discovery_task_handler(void *pvParameter) {
         ESP_LOGD("WebServer", "[Discovery Progress] %d%%", g_discovery_progress);
     };
     
+    // Set callback for real-time printer updates
+    PrinterDiscovery::set_printer_found_callback([](const std::string& ip) {
+        if (g_discovered_ips_mutex && xSemaphoreTake(g_discovered_ips_mutex, pdMS_TO_TICKS(100))) {
+            if (std::find(g_discovered_ips.begin(), g_discovered_ips.end(), ip) == g_discovered_ips.end()) {
+                g_discovered_ips.push_back(ip);
+                ESP_LOGI(TAG, "[Real-time] Added printer: %s (total: %d)", ip.c_str(), g_discovered_ips.size());
+            }
+            xSemaphoreGive(g_discovered_ips_mutex);
+        }
+    });
+    
     PrinterDiscovery discovery;
     // 60 second timeout for full subnet scans (254 IPs / 4 batch = 64 batches × 1s = 64s max)
     std::vector<PrinterDiscovery::PrinterInfo> results = discovery.discover(60000, progress_callback);
     
-    // Store discovered printers
-    g_discovered_ips.clear();
-    for (const auto &printer : results) {
-        g_discovered_ips.push_back(printer.ip_address);
-        ESP_LOGI(TAG, "[Discovery Result] Found printer: %s (%s)", printer.ip_address.c_str(), printer.hostname.c_str());
+    // Store discovered printers with mutex protection
+    if (g_discovered_ips_mutex && xSemaphoreTake(g_discovered_ips_mutex, portMAX_DELAY)) {
+        for (const auto &printer : results) {
+            // Check if not already added (avoid duplicates)
+            if (std::find(g_discovered_ips.begin(), g_discovered_ips.end(), printer.ip_address) == g_discovered_ips.end()) {
+                g_discovered_ips.push_back(printer.ip_address);
+                ESP_LOGI(TAG, "[Discovery Result] Found printer: %s (%s)", printer.ip_address.c_str(), printer.hostname.c_str());
+            }
+        }
+        xSemaphoreGive(g_discovered_ips_mutex);
     }
     
     g_discovery_progress = 100;
     g_discovery_in_progress = false;
     
-    ESP_LOGI(TAG, "[Discovery Task] Discovery complete. Found %d printers", (int)g_discovered_ips.size());
+    ESP_LOGI(TAG, "[Discovery Task] Discovery complete. Found %d printers", (int)results.size());
     
     // Log memory after discovery for debugging
     uint32_t free_heap = esp_get_free_heap_size();
@@ -1601,6 +1678,9 @@ esp_err_t WebServer::start() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_open_sockets = 7;
     config.max_uri_handlers = 22;  // Increased to accommodate all handlers (14 original + 3 network + 2 discovery + 2 more + 1 test)
+    config.max_resp_headers = 16;  // Increase response header limit
+    config.recv_wait_timeout = 10;
+    config.send_wait_timeout = 10;
     
     if (httpd_start(&server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server");

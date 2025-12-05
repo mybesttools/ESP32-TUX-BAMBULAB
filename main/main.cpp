@@ -228,6 +228,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "Auto-configured discovery network: %s", subnet_str);
         }
         
+        // Start MQTT connection to Bambu printer now that WiFi is ready
+        if (bambu_monitor_start_mqtt() == ESP_OK) {
+            ESP_LOGI(TAG, "Bambu Monitor MQTT connection started");
+        } else {
+            ESP_LOGW(TAG, "Failed to start Bambu Monitor MQTT connection");
+        }
+        
         // We got IP, lets update time from SNTP. RTC keeps time unless powered off
         xTaskCreate(configure_time, "config_time", 1024*4, NULL, 3, NULL);
     }
@@ -425,12 +432,12 @@ extern "C" void app_main(void)
 
     // Subscribe to page change events in the UI
     /* SPELLING MISTAKE IN API BUG => https://github.com/lvgl/lvgl/issues/3822 */
-    lv_msg_subsribe(MSG_PAGE_HOME, tux_ui_change_cb, NULL);
-    lv_msg_subsribe(MSG_PAGE_REMOTE, tux_ui_change_cb, NULL);
-    lv_msg_subsribe(MSG_PAGE_SETTINGS, tux_ui_change_cb, NULL);
-    lv_msg_subsribe(MSG_PAGE_OTA, tux_ui_change_cb, NULL);
-    lv_msg_subsribe(MSG_PAGE_BAMBU, tux_ui_change_cb, NULL);
-    lv_msg_subsribe(MSG_OTA_INITIATE, tux_ui_change_cb, NULL);    // Initiate OTA
+    lv_msg_subscribe(MSG_PAGE_HOME, tux_ui_change_cb, NULL);
+    lv_msg_subscribe(MSG_PAGE_REMOTE, tux_ui_change_cb, NULL);
+    lv_msg_subscribe(MSG_PAGE_SETTINGS, tux_ui_change_cb, NULL);
+    lv_msg_subscribe(MSG_PAGE_OTA, tux_ui_change_cb, NULL);
+    lv_msg_subscribe(MSG_PAGE_BAMBU, tux_ui_change_cb, NULL);
+    lv_msg_subscribe(MSG_OTA_INITIATE, tux_ui_change_cb, NULL);    // Initiate OTA
 
     // Start Bambu Monitor task for continuous printer polling
     xTaskCreatePinnedToCore(

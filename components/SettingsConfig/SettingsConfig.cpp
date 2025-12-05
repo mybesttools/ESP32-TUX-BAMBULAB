@@ -184,6 +184,7 @@ void SettingsConfig::load_config()
             const char *token = cJSON_GetStringValue(cJSON_GetObjectItem(printer_item, "token"));
             const char *serial = cJSON_GetStringValue(cJSON_GetObjectItem(printer_item, "serial"));
             cJSON *enabled_item = cJSON_GetObjectItem(printer_item, "enabled");
+            cJSON *ssl_verify_item = cJSON_GetObjectItem(printer_item, "disable_ssl_verify");
             
             if (name && ip) {
                 printer_config_t printer;
@@ -192,8 +193,9 @@ void SettingsConfig::load_config()
                 printer.token = token ? token : "";
                 printer.serial = serial ? serial : "";
                 printer.enabled = enabled_item ? enabled_item->type == cJSON_True : true;
+                printer.disable_ssl_verify = ssl_verify_item ? ssl_verify_item->type == cJSON_True : true;  // Default to true for easy setup
                 PrinterList.push_back(printer);
-                ESP_LOGI(TAG, "Loaded printer: %s at %s", name, ip);
+                ESP_LOGI(TAG, "Loaded printer: %s at %s (SSL verify: %s)", name, ip, printer.disable_ssl_verify ? "disabled" : "enabled");
             }
         }
     }
@@ -266,6 +268,7 @@ void SettingsConfig::save_config()
         cJSON_AddStringToObject(printer_obj, "token", printer.token.c_str());
         cJSON_AddStringToObject(printer_obj, "serial", printer.serial.c_str());
         cJSON_AddBoolToObject(printer_obj, "enabled", printer.enabled);
+        cJSON_AddBoolToObject(printer_obj, "disable_ssl_verify", printer.disable_ssl_verify);
         cJSON_AddItemToArray(printers_array, printer_obj);
     }
 
@@ -325,6 +328,7 @@ void SettingsConfig::add_printer(const string &name, const string &ip, const str
     printer.token = token;
     printer.serial = serial;
     printer.enabled = true;
+    printer.disable_ssl_verify = true;  // Default to disabled (easier setup, matches Home Assistant)
     PrinterList.push_back(printer);
     
     ESP_LOGI(TAG, "Added printer: %s at %s (serial: %s)", name.c_str(), ip.c_str(), serial.c_str());
@@ -340,7 +344,7 @@ void SettingsConfig::remove_printer(int index)
 
 printer_config_t SettingsConfig::get_printer(int index)
 {
-    printer_config_t empty_printer = {"", "", "", "", false};
+    printer_config_t empty_printer = {"", "", "", "", false, true};
     if (index >= 0 && index < (int)PrinterList.size()) {
         return PrinterList[index];
     }

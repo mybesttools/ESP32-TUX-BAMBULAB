@@ -20,8 +20,8 @@ extern "C" {
  * ============================================================================ */
 
 // All messaging functions are declared in LVGL:
-// - lv_msg_subsribe()
-// - lv_msg_subsribe_obj()  
+// - lv_msg_subscribe()
+// - lv_msg_subscribe_obj()  
 // - lv_msg_send()
 // - lv_msg_get_id()
 // - lv_msg_get_payload()

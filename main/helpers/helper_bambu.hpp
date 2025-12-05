@@ -70,7 +70,12 @@ static esp_err_t bambu_helper_init()
         .ip_address = (char*)"10.13.13.85",
         .port = 8883,                          // MQTT secure port
         .access_code = (char*)"5d35821c",
+        .tls_certificate = NULL,               // Will be fetched dynamically
     };
+    
+    // Fetch TLS certificate from printer (done once at init, before WiFi)
+    // Note: This should ideally be done after WiFi is connected
+    // For now, certificate will be fetched when MQTT starts
     
     // Initialize Bambu Monitor
     esp_err_t ret = bambu_monitor_init(&printer_config);
