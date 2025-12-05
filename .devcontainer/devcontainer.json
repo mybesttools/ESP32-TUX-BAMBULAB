@@ -1,0 +1,39 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the README at:
+// https://github.com/microsoft/vscode-dev-containers/tree/v0.183.0/containers/ubuntu
+{
+	"name": "ESP-IDF v5.0 Development",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	"settings": {
+		"terminal.integrated.defaultProfile.linux": "bash",
+		"idf.espIdfPath": "/opt/esp/idf",
+		"idf.customExtraPaths": "",
+		"idf.pythonBinPath": "/opt/esp/python_env/idf5.0_py3.8_env/bin/python",
+		"idf.toolsPath": "/opt/esp",
+		"idf.gitPath": "/usr/bin/git",
+		"idf.port": "/dev/ttyUSB0",
+		"idf.flashBaudRate": "460800",
+		"idf.adapterTargetName": "esp32"
+	},
+	// Add the IDs of extensions you want installed when the container is created.
+	"extensions": [
+		"ms-vscode.cpptools",
+		"espressif.esp-idf-extension",
+		"ms-python.python"
+	],
+
+	// Forward serial port for device flashing
+	"forwardPorts": [],
+	
+	// Device mount for USB serial (required for flashing)
+	"mounts": [
+		"source=/dev,target=/dev,type=bind,consistency=cached"
+	],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "/opt/esp/python_env/idf5.0_py3.8_env/bin/pip install --upgrade idf-component-manager markdownlint-cli",
+
+	// Run as root (ESP IDF base image doesn't have non-root user)
+	"remoteUser": "root"
+}
