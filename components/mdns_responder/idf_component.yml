@@ -1,0 +1,2 @@
+version: "0.1.0"
+description: "Hostname responder for mDNS-compatible networking"
