@@ -90,6 +90,24 @@ esp_err_t bambu_monitor_start_mqtt(void);
  */
 char* bambu_fetch_tls_certificate(const char* ip_address, uint16_t port);
 
+/**
+ * @brief Send MQTT query request to printer (e.g., "pushall" command)
+ * 
+ * This function publishes a query to device/{serial}/request to request
+ * a full status update from the printer.
+ * 
+ * @return ESP_OK on success, ESP_FAIL if not connected
+ */
+esp_err_t bambu_send_query(void);
+
+/**
+ * @brief Send custom MQTT command to printer
+ * 
+ * @param command JSON command string to send
+ * @return ESP_OK on success, ESP_FAIL if not connected
+ */
+esp_err_t bambu_send_command(const char* command);
+
 #ifdef __cplusplus
 }
 #endif

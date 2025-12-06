@@ -32,6 +32,7 @@ SOFTWARE.
 #include "events/gui_events.hpp"
 #include <esp_partition.h>
 #include "SettingsConfig.hpp"
+#include "BambuMonitor.hpp"
 
 LV_IMG_DECLARE(dev_bg)
 //LV_IMG_DECLARE(tux_logo)
@@ -874,6 +875,22 @@ static void create_page_bambu(lv_obj_t *parent)
     // Temperature label
     lv_obj_t *lbl_temps = lv_label_create(cont);
     lv_label_set_text(lbl_temps, "Bed: -- Nozzle: --");
+    
+    // Test Query Button
+    lv_obj_t *btn_query = lv_btn_create(cont);
+    lv_obj_set_size(btn_query, 200, 50);
+    lv_obj_t *lbl_query = lv_label_create(btn_query);
+    lv_label_set_text(lbl_query, "Send Query");
+    lv_obj_center(lbl_query);
+    lv_obj_add_event_cb(btn_query, [](lv_event_t *e) {
+        ESP_LOGI("GUI", "Query button clicked - sending MQTT query");
+        esp_err_t ret = bambu_send_query();
+        if (ret == ESP_OK) {
+            ESP_LOGI("GUI", "Query sent successfully");
+        } else {
+            ESP_LOGE("GUI", "Failed to send query");
+        }
+    }, LV_EVENT_CLICKED, NULL);
     
     // Subscribe to Bambu messages
     lv_msg_subscribe(MSG_BAMBU_STATUS, bambu_status_cb, lbl_status);

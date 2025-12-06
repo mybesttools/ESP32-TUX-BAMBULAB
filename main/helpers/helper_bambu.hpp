@@ -71,6 +71,7 @@ static esp_err_t bambu_helper_init()
         .port = 8883,                          // MQTT secure port
         .access_code = (char*)"5d35821c",
         .tls_certificate = NULL,               // Will be fetched dynamically
+        .disable_ssl_verify = true,            // Skip SSL verification for easier setup
     };
     
     // Fetch TLS certificate from printer (done once at init, before WiFi)
