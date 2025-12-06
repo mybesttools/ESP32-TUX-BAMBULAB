@@ -17,12 +17,40 @@ echo "Port:     $PORT"
 echo "Baud:     $BAUD"
 [ -n "$FILTER" ] && echo "Filter:   $FILTER" || echo "Filter:   (none)"
 echo ""
+
+# Check if ESP-IDF is installed
+if [ ! -d "$HOME/esp-idf" ]; then
+    echo "❌ ESP-IDF not found at $HOME/esp-idf"
+    echo ""
+    echo "Please run the installation script first:"
+    echo "  ./setup_idf.sh"
+    echo ""
+    echo "Or wait for the current installation to complete."
+    exit 1
+fi
+
+# Source ESP-IDF environment
+if [ -f "$HOME/esp-idf/export.sh" ]; then
+    echo "Loading ESP-IDF environment..."
+    source "$HOME/esp-idf/export.sh" > /dev/null 2>&1
+else
+    echo "❌ ESP-IDF export.sh not found"
+    exit 1
+fi
+
+# Check if port exists
+if [ ! -e "$PORT" ]; then
+    echo "❌ Port $PORT not found"
+    echo ""
+    echo "Available ports:"
+    ls -1 /dev/cu.* 2>/dev/null || echo "  (none found)"
+    echo ""
+    exit 1
+fi
+
 echo "Press Ctrl+C to exit"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-
-# Source ESP-IDF environment
-source "$HOME/esp-idf/export.sh" > /dev/null 2>&1
 
 if [ -n "$FILTER" ]; then
     idf.py -p "$PORT" -b "$BAUD" monitor | grep -E "$FILTER|error|ERROR|failed|FAILED"
