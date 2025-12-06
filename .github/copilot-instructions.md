@@ -157,6 +157,12 @@ Template in `main/main.cpp`:
 
 ## Project-Specific Conventions
 
+### Documentation
+- **All documentation must be placed in the `docs/` folder**
+- No markdown files in project root except README.md and LICENSE
+- Use descriptive filenames (e.g., `BAMBU_QUICKSTART.md`, `CAROUSEL_IMPLEMENTATION.md`)
+- Create index files for related documentation groups
+
 ### Naming
 - **Functions**: `snake_case`, suffix with `_task`, `_handler`, `_init` for clarity
 - **Global state**: `g_` prefix (e.g., `g_lvgl_task_handle`)

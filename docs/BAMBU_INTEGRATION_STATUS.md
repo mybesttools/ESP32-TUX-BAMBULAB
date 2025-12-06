@@ -1,8 +1,49 @@
 # Bambu Lab Integration - Implementation Summary
 
-## Status: ✅ COMPLETE AND INTEGRATED
+## Status: ⚠️ IN PROGRESS - MQTT CONNECTION WORKING
 
-The BambuMonitor component has been successfully built and integrated into the ESP32-TUX firmware.
+### Latest Update: December 6, 2025
+
+**Current State:**
+- ✅ Successfully switched to WT32-SC01-Plus (ESP32-S3)
+- ✅ TLS handshake successful with printer
+- ✅ MQTT connected and subscribed to printer
+- ⚠️ Buffer size increased to handle large JSON payloads (needs testing)
+
+### Hardware Configuration
+
+**Device:** WT32-SC01-Plus
+- **MCU:** ESP32-S3 (Dual Core @ 160MHz)
+- **Flash:** 8MB
+- **PSRAM:** 2MB (QUAD mode)
+- **Display:** 480x320 ST7796 (8-bit parallel)
+- **SD Card:** 4GB inserted
+
+**Configuration File:** `sdkconfig.esp32s3.macmini`
+- Target: esp32s3
+- PSRAM: QUAD mode (not OCTAL - causes bootloop)
+- Flash: 8MB
+- Partition: partition-8MB.csv
+
+### MQTT Connection Progress
+
+**What's Working:**
+1. ESP-IDF mqtt_client with `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y`
+2. TLS handshake completes successfully
+3. MQTT CONNECT and SUBSCRIBE successful
+4. Printer responds to subscription
+
+**Issue Fixed:**
+- Changed buffer.size from 4KB → 16KB (Bambu sends large JSON ~10KB+)
+- Changed buffer.out_size from 2KB → 4KB
+- Increased task stack from 6KB → 8KB
+- Error was: `-0x7100` (MBEDTLS_ERR_SSL_ALLOC_FAILED)
+
+**Next Steps:**
+1. Build and test with new buffer sizes
+2. Verify printer data reception
+3. Parse JSON and update UI
+4. Test carousel with printer GIFs
 
 ## What Was Integrated
 

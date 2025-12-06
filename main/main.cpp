@@ -103,6 +103,14 @@ static void tux_event_handler(void* arg, esp_event_base_t event_base,
 
         // Enable timer after the date/time is set.
         lv_timer_ready(timer_weather); 
+        
+        // Start MQTT connection to Bambu printer now that time is synced
+        // This ensures TLS certificate verification has accurate system time
+        if (bambu_monitor_start() == ESP_OK) {
+            ESP_LOGI(TAG, "Bambu Monitor MQTT connection started (time synced)");
+        } else {
+            ESP_LOGW(TAG, "Failed to start Bambu Monitor MQTT connection");
+        }
 
     } else if (event_id == TUX_EVENT_OTA_STARTED) {
         // OTA Started
@@ -228,12 +236,8 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "Auto-configured discovery network: %s", subnet_str);
         }
         
-        // Start MQTT connection to Bambu printer now that WiFi is ready
-        if (bambu_monitor_start_mqtt() == ESP_OK) {
-            ESP_LOGI(TAG, "Bambu Monitor MQTT connection started");
-        } else {
-            ESP_LOGW(TAG, "Failed to start Bambu Monitor MQTT connection");
-        }
+        // NOTE: Bambu MQTT connection will start after time is synced (TUX_EVENT_DATETIME_SET)
+        // This ensures TLS certificate verification has accurate system time
         
         // We got IP, lets update time from SNTP. RTC keeps time unless powered off
         xTaskCreate(configure_time, "config_time", 1024*4, NULL, 3, NULL);

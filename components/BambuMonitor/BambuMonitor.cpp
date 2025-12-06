@@ -248,28 +248,13 @@ esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
     mqtt_cfg.credentials.username = "bblp";
     mqtt_cfg.credentials.authentication.password = config->access_code;
     
-    // Buffer settings - reduced to save memory
-    mqtt_cfg.buffer.size = 4096;
-    mqtt_cfg.buffer.out_size = 2048;
+    // Buffer settings - Bambu printers send large JSON payloads (10KB+)
+    mqtt_cfg.buffer.size = 16384;       // 16KB receive buffer
+    mqtt_cfg.buffer.out_size = 4096;    // 4KB send buffer
     
-    // Task settings - increase stack size to prevent task creation failure
-    mqtt_cfg.task.priority = 4;        // Priority 4 (lower than LVGL task which is 5)
-    mqtt_cfg.task.stack_size = 6144;   // 6KB stack (increased from default 4KB)
-    
-    // Session settings
-    mqtt_cfg.session.keepalive = 60;
-    
-    // Authentication
-    mqtt_cfg.credentials.username = "bblp";
-    mqtt_cfg.credentials.authentication.password = config->access_code;
-    
-    // Buffer settings - reduced to save memory
-    mqtt_cfg.buffer.size = 4096;
-    mqtt_cfg.buffer.out_size = 2048;
-    
-    // Task settings - increase stack size to prevent task creation failure
-    mqtt_cfg.task.priority = 4;        // Priority 4 (lower than LVGL task which is 5)
-    mqtt_cfg.task.stack_size = 6144;   // 6KB stack (increased from default 4KB)
+    // Task settings - increase stack size for larger buffers
+    mqtt_cfg.task.priority = 4;         // Priority 4 (lower than LVGL task which is 5)
+    mqtt_cfg.task.stack_size = 8192;    // 8KB stack
     
     // Session settings
     mqtt_cfg.session.keepalive = 60;
@@ -312,7 +297,7 @@ esp_err_t bambu_register_event_handler(esp_event_handler_t handler)
     return ESP_OK;
 }
 
-esp_err_t bambu_monitor_start_mqtt(void)
+esp_err_t bambu_monitor_start(void)
 {
     if (!mqtt_client) {
         ESP_LOGE(TAG, "MQTT client not initialized");

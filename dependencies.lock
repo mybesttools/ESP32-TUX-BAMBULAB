@@ -12,10 +12,10 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.1.0
+    version: 5.0.0
 direct_dependencies:
 - espressif/fmt
 - idf
 manifest_hash: 0c06fe50fbc56956deaf5c5bb0525aa2270a22250861b6f0369d0e7d9dd39676
-target: esp32
+target: esp32s3
 version: 2.0.0
