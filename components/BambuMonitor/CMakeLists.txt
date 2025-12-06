@@ -3,4 +3,6 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES esp_event
     PRIV_REQUIRES json nvs_flash mqtt
+    EMBED_TXTFILES
+        certs/bambu_combined.cert
 )

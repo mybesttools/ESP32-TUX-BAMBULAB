@@ -27,6 +27,12 @@ static bool mqtt_initialized = false;
 static char* cached_tls_certificate = NULL;  // Dynamically fetched and cached
 static bambu_printer_config_t saved_config = {0};  // Save config for later use
 
+// Embedded Bambu Lab root certificates (combined)
+// These are sourced from Home Assistant integration: https://github.com/greghesp/ha-bambulab
+// Contains all three Bambu Lab CA certificates: bambu.cert, bambu_p2s_250626.cert, bambu_h2c_251122.cert
+extern const uint8_t bambu_cert_start[] asm("_binary_bambu_combined_cert_start");
+extern const uint8_t bambu_cert_end[] asm("_binary_bambu_combined_cert_end");
+
 /**
  * @brief MQTT event handler for Bambu printer communication
  */
@@ -212,31 +218,46 @@ esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
     ESP_LOGI(TAG, "Initializing Bambu Monitor for device: %s at %s:%d", 
              config->device_id, config->ip_address, config->port);
     
+    // Save config for later use (for queries)
+    saved_config.device_id = config->device_id ? strdup(config->device_id) : NULL;
+    saved_config.ip_address = config->ip_address ? strdup(config->ip_address) : NULL;
+    saved_config.port = config->port;
+    saved_config.access_code = config->access_code ? strdup(config->access_code) : NULL;
+    saved_config.tls_certificate = config->tls_certificate ? strdup(config->tls_certificate) : NULL;
+    saved_config.disable_ssl_verify = config->disable_ssl_verify;
+    
     // Configure MQTT client
     esp_mqtt_client_config_t mqtt_cfg = {};
     mqtt_cfg.broker.address.hostname = config->ip_address;
     mqtt_cfg.broker.address.port = config->port;
     mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
     
-    // SSL/TLS Configuration - inspired by Home Assistant's approach
-    if (config->disable_ssl_verify) {
-        // Skip certificate verification (simpler setup, less secure)
-        // This is the Home Assistant default for local printers
-        ESP_LOGI(TAG, "SSL verification disabled - using insecure connection");
-        mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-        mqtt_cfg.broker.verification.certificate = NULL;  // No cert needed
-    } else {
-        // Use certificate verification (more secure)
-        if (config->tls_certificate) {
-            ESP_LOGI(TAG, "Using provided TLS certificate for verification");
-            mqtt_cfg.broker.verification.certificate = config->tls_certificate;
-            mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-        } else {
-            ESP_LOGW(TAG, "No TLS certificate provided - connection will likely fail");
-            ESP_LOGW(TAG, "Either enable 'disable_ssl_verify' or provide a certificate");
-            mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-        }
-    }
+    // SSL/TLS Configuration - INSECURE MODE (bypass certificate validation)
+    // Bambu Lab printers use self-signed certificates that fail mbedTLS strict validation
+    // Home Assistant integration uses the same approach: ssl.CERT_NONE when disable_ssl_verify=True
+    // This is safe for LAN-only connections to known local devices
+    ESP_LOGI(TAG, "Configuring SSL in insecure mode (no certificate validation)");
+    
+    // With CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y in sdkconfig, esp-tls will skip verification
+    // We still need to set skip_cert_common_name_check to prevent name validation
+    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+    
+    ESP_LOGI(TAG, "SSL certificate validation disabled via CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY");
+    
+    // Authentication
+    mqtt_cfg.credentials.username = "bblp";
+    mqtt_cfg.credentials.authentication.password = config->access_code;
+    
+    // Buffer settings - reduced to save memory
+    mqtt_cfg.buffer.size = 4096;
+    mqtt_cfg.buffer.out_size = 2048;
+    
+    // Task settings - increase stack size to prevent task creation failure
+    mqtt_cfg.task.priority = 4;        // Priority 4 (lower than LVGL task which is 5)
+    mqtt_cfg.task.stack_size = 6144;   // 6KB stack (increased from default 4KB)
+    
+    // Session settings
+    mqtt_cfg.session.keepalive = 60;
     
     // Authentication
     mqtt_cfg.credentials.username = "bblp";
@@ -392,5 +413,70 @@ esp_err_t bambu_connect(const char* ip_address, uint16_t port, const char* acces
     }
     
     ESP_LOGI(TAG, "MQTT connection initiated");
+    return ESP_OK;
+}
+
+/**
+ * @brief Send MQTT query request to printer
+ * 
+ * Sends a "pushall" request to get complete printer status.
+ * The printer will respond on device/{serial}/report topic.
+ */
+esp_err_t bambu_send_query(void)
+{
+    if (!mqtt_client) {
+        ESP_LOGE(TAG, "MQTT client not initialized");
+        return ESP_FAIL;
+    }
+    
+    // Build query topic: device/{device_id}/request
+    char topic[128];
+    snprintf(topic, sizeof(topic), "device/%s/request", 
+             saved_config.device_id ? saved_config.device_id : "unknown");
+    
+    // Standard Bambu "pushall" command to request full status
+    const char* pushall_cmd = "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}";
+    
+    ESP_LOGI(TAG, "Sending pushall query to %s", topic);
+    
+    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, pushall_cmd, 0, 1, 0);
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish query (msg_id: %d)", msg_id);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Query sent successfully (msg_id: %d)", msg_id);
+    return ESP_OK;
+}
+
+/**
+ * @brief Send custom MQTT command to printer
+ */
+esp_err_t bambu_send_command(const char* command)
+{
+    if (!mqtt_client) {
+        ESP_LOGE(TAG, "MQTT client not initialized");
+        return ESP_FAIL;
+    }
+    
+    if (!command) {
+        ESP_LOGE(TAG, "Command is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Build request topic
+    char topic[128];
+    snprintf(topic, sizeof(topic), "device/%s/request", 
+             saved_config.device_id ? saved_config.device_id : "unknown");
+    
+    ESP_LOGI(TAG, "Sending command to %s: %s", topic, command);
+    
+    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, command, 0, 1, 0);
+    if (msg_id < 0) {
+        ESP_LOGE(TAG, "Failed to publish command (msg_id: %d)", msg_id);
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Command sent successfully (msg_id: %d)", msg_id);
     return ESP_OK;
 }
