@@ -79,7 +79,7 @@ esp_err_t bambu_register_event_handler(esp_event_handler_t handler);
  * 
  * @return ESP_OK on success
  */
-esp_err_t bambu_monitor_start_mqtt(void);
+esp_err_t bambu_monitor_start(void);
 
 /**
  * @brief Fetch TLS certificate from printer

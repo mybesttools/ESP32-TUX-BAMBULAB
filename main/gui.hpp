@@ -135,7 +135,7 @@ static lv_style_t style_glow;
 /******************
  *  SLIDESHOW MODE
  ******************/
-static bool slideshow_enabled = true;  // Default: enabled (presentation mode)
+static bool slideshow_enabled = true;  // Carousel navigation - keep enabled
 static uint32_t slideshow_slide_idx = 0;
 static lv_timer_t *slideshow_timer = NULL;
 #define SLIDESHOW_SLIDE_DURATION_MS 8000  // 8 seconds per slide
@@ -230,7 +230,7 @@ void lv_setup_styles()
     lv_style_set_radius(&style_content_bg, 0);
 
 // Enabling wallpaper image slows down scrolling perf etc...
-#if defined(CONFIG_WALLPAPER_IMAGE)
+#if 0  // DISABLED - use gradient to save memory for MQTT
     // Image Background
     // CF_INDEXED_8_BIT for smaller size - resolution 480x480
     // NOTE: Dynamic loading bg from SPIFF makes screen perf bad
@@ -244,7 +244,7 @@ void lv_setup_styles()
     //lv_style_set_bg_img_src(&style_content_bg, &dev_bg);
     // lv_style_set_bg_img_opa(&style_content_bg,LV_OPA_50);
 #else
-    ESP_LOGW(TAG,"Using Gradient");
+    ESP_LOGW(TAG,"Using Gradient (background image disabled to save memory)");
     // Gradient Background
     static lv_grad_dsc_t grad;
     grad.dir = LV_GRAD_DIR_VER;
