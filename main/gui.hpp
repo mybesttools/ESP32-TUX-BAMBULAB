@@ -33,6 +33,10 @@ SOFTWARE.
 #include <esp_partition.h>
 #include "SettingsConfig.hpp"
 #include "BambuMonitor.hpp"
+#include <map>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include <cJSON.h>  // For file-based weather polling
 
 LV_IMG_DECLARE(dev_bg)
 //LV_IMG_DECLARE(tux_logo)
@@ -55,18 +59,18 @@ LV_FONT_DECLARE(font_fa_14)
 /*********************
  *      DEFINES
  *********************/
-#define HEADER_HEIGHT 30
+#define HEADER_HEIGHT 60
 #define FOOTER_HEIGHT 30
 
 /******************
  *  LV DEFINES
  ******************/
-static const lv_font_t *font_large;
 static const lv_font_t *font_normal;
 static const lv_font_t *font_symbol;
 static const lv_font_t *font_fa;
 static const lv_font_t *font_xl;
 static const lv_font_t *font_xxl;
+static const lv_font_t *font_large;
 
 static lv_obj_t *panel_header;
 static lv_obj_t *panel_title;
@@ -85,6 +89,39 @@ static lv_obj_t *prov_qr;
 
 // Carousel widget for multi-location weather and printer display
 static CarouselWidget *carousel_widget = nullptr;
+
+// Slide countries map by INDEX (lazy initialization to avoid static init issues)
+static std::map<int, std::string> *slide_country_by_index_ptr = nullptr;
+
+// UI IPC queue for marshaling data into the LVGL task context
+enum class ui_ipc_type : uint8_t {
+    TIME = 0,
+};
+
+struct ui_ipc_msg_t {
+    ui_ipc_type type;
+    struct tm time_payload;
+};
+
+static QueueHandle_t ui_ipc_queue = nullptr;
+static lv_timer_t *ui_ipc_timer = nullptr;
+static lv_timer_t *weather_poll_timer = nullptr;  // File-based weather polling timer
+
+// Global buffers for datetime callback (avoid stack corruption)
+static char g_time_buf[32] = {0};
+static char g_ampm_buf[16] = {0};
+static char g_date_buf[128] = {0};
+static char g_current_time[128] = {0};
+static char g_subtitle_buf[300] = {0};  // 128 + 128 + separator + null
+
+// Forward declarations for UI IPC helpers
+bool ui_ipc_post_time(const struct tm &dtinfo);
+void ui_ipc_init();
+
+// Forward declaration for file-based weather polling
+static void weather_poll_timer_cb(lv_timer_t *timer);
+static void poll_weather_files();
+static void weather_poll_init();
 
 static lv_obj_t *label_title;
 static lv_obj_t *label_message;
@@ -131,6 +168,13 @@ static lv_style_t style_battery;
 static lv_style_t style_ui_island;
 
 static lv_style_t style_glow;
+
+/******************
+ *  FOOTER AUTO-HIDE
+ ******************/
+static lv_obj_t *panel_footer_global = NULL;
+static bool footer_visible = false;
+static lv_obj_t *content_container_global = NULL;  // For resizing when footer toggles
 
 /******************
  *  SLIDESHOW MODE
@@ -199,12 +243,13 @@ static void checkupdates_event_handler(lv_event_t *e);
 static void home_clicked_eventhandler(lv_event_t *e);
 static void status_clicked_eventhandler(lv_event_t *e);
 static void footer_button_event_handler(lv_event_t *e);
+static void screen_touch_event_handler(lv_event_t *e);
 
 // static void new_theme_apply_cb(lv_theme_t * th, lv_obj_t * obj);
 
 /* MSG Events */
 void datetime_event_cb(lv_event_t * e);
-void weather_event_cb(lv_event_t * e);
+// weather_event_cb REMOVED - replaced by file-based polling
 
 static void status_change_cb(void * s, lv_msg_t *m);
 static void lv_update_battery(uint batval);
@@ -390,6 +435,32 @@ static void create_header(lv_obj_t *parent)
     // lv_obj_add_event_cb(panel_status, status_clicked_eventhandler, LV_EVENT_CLICKED, NULL);
 }
 
+static void screen_touch_event_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_CLICKED && panel_footer_global) {
+        lv_indev_t * indev = lv_indev_get_act();
+        lv_point_t point;
+        lv_indev_get_point(indev, &point);
+        
+        // If touching bottom 60px of screen, toggle footer
+        if (point.y > screen_h - 60) {
+            if (footer_visible) {
+                // Hide footer - position just below visible screen
+                lv_obj_set_y(panel_footer_global, screen_h - HEADER_HEIGHT);
+                footer_visible = false;
+                // Content stays same height - footer is accessible by scrolling down
+            } else {
+                // Show footer - slide it into view
+                lv_obj_set_y(panel_footer_global, screen_h - HEADER_HEIGHT - FOOTER_HEIGHT);
+                footer_visible = true;
+                // Content stays same height
+            }
+        }
+    }
+}
+
 static void create_footer(lv_obj_t *parent)
 {
     lv_obj_t *panel_footer = lv_obj_create(parent);
@@ -399,6 +470,13 @@ static void create_footer(lv_obj_t *parent)
     lv_obj_set_style_radius(panel_footer, 0, 0);
     lv_obj_set_align(panel_footer, LV_ALIGN_BOTTOM_MID);
     lv_obj_set_scrollbar_mode(panel_footer, LV_SCROLLBAR_MODE_OFF);
+    
+    // Store global reference for toggle
+    panel_footer_global = panel_footer;
+    
+    // Position just below content area - accessible by scrolling down
+    lv_obj_set_y(panel_footer, screen_h - HEADER_HEIGHT);
+    footer_visible = false;
 
 /*
     // Create Footer label and animate if text is longer
@@ -491,8 +569,9 @@ static void tux_panel_clock_weather(lv_obj_t *parent)
     lv_obj_set_style_border_opa(cont_weather,LV_OPA_TRANSP,0);
 
     // MSG - MSG_WEATHER_CHANGED - EVENT
-    lv_obj_add_event_cb(cont_weather, weather_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
-    lv_msg_subscribe_obj(MSG_WEATHER_CHANGED, cont_weather, NULL);
+    // Note: weather_event_cb now only handles carousel; old cont_weather subscription disabled
+    // lv_obj_add_event_cb(cont_weather, weather_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
+    // lv_msg_subscribe_obj(MSG_WEATHER_CHANGED, cont_weather, NULL);
 
     // This only for landscape
     // lv_obj_t *lbl_unit = lv_label_create(cont_weather);
@@ -755,21 +834,12 @@ static void create_page_remote(lv_obj_t *parent)
 
 static void slideshow_timer_cb(lv_timer_t * timer)
 {
-    // Auto-advance slideshow every 8 seconds
+    // Auto-advance carousel every 8 seconds
     if (!slideshow_enabled) return;
     
-    slideshow_slide_idx++;
-    
-    // Cycle: 0=Weather, 1=Printer Status, repeat
-    if (slideshow_slide_idx >= 2) {
-        slideshow_slide_idx = 0;
-    }
-    
-    // Trigger refresh of home page content
-    if (current_page == 0) {  // Only if on home page
-        lv_obj_clean(content_container);
-        create_page_home(content_container);
-        anim_move_left_x(content_container, screen_w, 0, 200);
+    // Advance to next slide in carousel
+    if (carousel_widget && current_page == 0 && carousel_widget->slides.size() > 0) {  // Only if on home page with slides
+        carousel_widget->next_slide();
     }
 }
 
@@ -781,8 +851,28 @@ static void create_page_home(lv_obj_t *parent)
     /* HOME PAGE - CAROUSEL MODE */
     // Create carousel widget to display weather locations and printer status
     if (!carousel_widget) {
-        carousel_widget = new CarouselWidget(parent, lv_obj_get_width(parent), 250);
+        // Hide header on home page for full-screen carousel
+        if (panel_header) {
+            lv_obj_add_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
+        }
+        
+        // Use full screen height - carousel fills entire screen
+        carousel_widget = new CarouselWidget(parent, screen_w, screen_h);
+        // Position at top of screen
+        lv_obj_set_size(carousel_widget->container, LV_PCT(100), screen_h);
+        lv_obj_align(carousel_widget->container, LV_ALIGN_TOP_LEFT, 0, 0);
+        
+        // Subscribe carousel to time messages only
+        lv_obj_add_event_cb(carousel_widget->container, datetime_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
+        lv_msg_subscribe_obj(MSG_TIME_CHANGED, carousel_widget->container, NULL);
+        
+        // Weather updates via file polling - no event subscription needed
+        // weather_event_cb removed - poll_weather_files() reads from /spiffs/weather/<city>.json
+        
         update_carousel_slides();
+        
+        // Start weather file polling timer
+        weather_poll_init();
     }
 }
 
@@ -790,21 +880,29 @@ static void update_carousel_slides()
 {
     if (!carousel_widget) return;
     
+    ESP_LOGW(TAG, "update_carousel_slides() starting");
+    
     // Clear existing slides
     carousel_widget->slides.clear();
     
-    // Add weather location slides
+    // Add weather location slides with more descriptive info
     if (cfg) {
         int weather_count = cfg->get_weather_location_count();
         for (int i = 0; i < weather_count; i++) {
             weather_location_t loc = cfg->get_weather_location(i);
             if (loc.enabled) {
                 carousel_slide_t slide;
-                slide.title = loc.name.empty() ? loc.city : loc.name;
-                slide.subtitle = loc.country;
-                slide.value1 = "24°C";  // Will be updated by weather callback
-                slide.value2 = "Partly Cloudy";  // Will be updated by weather callback
+                // Use city name as title, country as subtitle with time placeholder
+                slide.title = loc.city.empty() ? loc.name : loc.city;
+                slide.subtitle = "--:-- • " + loc.country;
+                slide.value1 = "--°C";  // Will be updated by weather callback
+                slide.value2 = "Loading weather...";  // Will be updated by weather callback
+                slide.value3 = "H: --° L: --° • Humidity: --%";  // Temp range and humidity
+                slide.value4 = "Wind: -- m/s • Pressure: -- hPa";  // Wind and pressure
                 slide.bg_color = lv_color_hex(0x1e3a5f);  // Blue weather theme
+                if (!slide_country_by_index_ptr) slide_country_by_index_ptr = new std::map<int, std::string>();
+                int slide_index = carousel_widget ? carousel_widget->slides.size() : 0;
+                (*slide_country_by_index_ptr)[slide_index] = loc.country;  // Store country by index
                 carousel_widget->add_slide(slide);
             }
         }
@@ -827,18 +925,21 @@ static void update_carousel_slides()
         }
     }
     
-    // If no slides, show placeholder
-    if (carousel_widget->slides.size() == 0) {
+    // If only the time slide exists, add a welcome message
+    if (carousel_widget->slides.size() == 1) {
         carousel_slide_t placeholder;
-        placeholder.title = "Welcome";
+        placeholder.title = "Welcome to TUX";
         placeholder.subtitle = "Add locations & printers";
-        placeholder.value1 = "to get started";
+        placeholder.value1 = "to see more info";
         placeholder.value2 = "";
         placeholder.bg_color = lv_color_hex(0x2a2a2a);
         carousel_widget->add_slide(placeholder);
     }
     
     carousel_widget->update_slides();
+    
+    // Force layout update to make carousel visible immediately
+    lv_obj_update_layout(carousel_widget->container);
 }
 
 static void create_page_settings(lv_obj_t *parent)
@@ -946,11 +1047,14 @@ static void show_ui()
 
     // CONTENT CONTAINER 
     content_container = lv_obj_create(screen_container);
-    lv_obj_set_size(content_container, screen_w, screen_h - HEADER_HEIGHT - FOOTER_HEIGHT);
-    lv_obj_align(content_container, LV_ALIGN_TOP_MID, 0, HEADER_HEIGHT);
+    content_container_global = content_container;  // Store global reference
+    // Use full screen height - header is hidden on home page
+    lv_obj_set_size(content_container, screen_w, screen_h);
+    lv_obj_align(content_container, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_border_width(content_container, 0, 0);
     lv_obj_set_style_bg_opa(content_container, LV_OPA_TRANSP, 0);
-
+    lv_obj_set_style_pad_all(content_container, 0, 0);  // Remove default padding
+    
     lv_obj_set_flex_flow(content_container, LV_FLEX_FLOW_COLUMN);
 
     // Show Home Page
@@ -961,7 +1065,7 @@ static void show_ui()
     // Initialize slideshow timer (presentation mode - auto cycles through slides)
     if (slideshow_enabled) {
         slideshow_timer = lv_timer_create(slideshow_timer_cb, SLIDESHOW_SLIDE_DURATION_MS, NULL);
-        ESP_LOGW(TAG, "Slideshow mode enabled - auto-cycling every %d ms", SLIDESHOW_SLIDE_DURATION_MS);
+        ESP_LOGI(TAG, "Slideshow mode enabled - auto-cycling every %d ms", SLIDESHOW_SLIDE_DURATION_MS);
     }
 
     // Load main screen with animation
@@ -1180,60 +1284,301 @@ static const char* get_firmware_version()
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
     esp_app_desc_t running_app_info;
-    if (esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
-        return fmt::format("{}",running_app_info.version).c_str();
+    static std::string cached_version;
+
+    if (cached_version.empty() &&
+        esp_ota_get_partition_description(running, &running_app_info) == ESP_OK) {
+        cached_version = running_app_info.version;
     }
-    return "0.0.0";
+
+    if (cached_version.empty()) cached_version = "0.0.0";
+
+    return cached_version.c_str();
 }
+
+static void update_time_ui_from_tm(const struct tm *dtinfo)
+{
+    if (!dtinfo || !carousel_widget) return;
+    if (!carousel_widget->slide_panels.size()) return;
+
+    // Format time using GLOBAL buffers (avoid any stack issues)
+    strftime(g_time_buf, sizeof(g_time_buf), "%I:%M", dtinfo);
+    strftime(g_ampm_buf, sizeof(g_ampm_buf), "%p", dtinfo);
+    strftime(g_date_buf, sizeof(g_date_buf), "%a, %e %b", dtinfo);
+    snprintf(g_current_time, sizeof(g_current_time), "%s %s", g_time_buf, g_ampm_buf);
+
+    // Pre-format the subtitle BEFORE accessing widgets
+    snprintf(g_subtitle_buf, sizeof(g_subtitle_buf), "%s • %s", g_current_time, g_date_buf);
+
+    ESP_LOGD(TAG, "update_time_ui_from_tm: %s (panels=%d)",
+             g_subtitle_buf, carousel_widget->slide_panels.size());
+
+    // Update ALL slide panels
+    for (size_t i = 0; i < carousel_widget->slide_panels.size(); i++) {
+        lv_obj_t *panel = carousel_widget->slide_panels[i];
+
+        // Robust NULL checks
+        if (!panel || !lv_obj_is_valid(panel)) {
+            ESP_LOGE(TAG, "Panel %d is NULL!", (int)i);
+            continue;
+        }
+
+        uint32_t child_cnt = lv_obj_get_child_cnt(panel);
+        if (child_cnt < 2) {
+            ESP_LOGE(TAG, "Panel %d has only %ld children!", (int)i, child_cnt);
+            continue;
+        }
+
+        lv_obj_t *subtitle_label = lv_obj_get_child(panel, 1);
+        if (!subtitle_label || !lv_obj_is_valid(subtitle_label)) {
+            ESP_LOGE(TAG, "Panel %d child(1) is NULL!", (int)i);
+            continue;
+        }
+
+        ESP_LOGD(TAG, "Updating panel %d", (int)i);
+
+        // Use set_text_static since buffer is global and persistent
+        lv_label_set_text_static(subtitle_label, g_subtitle_buf);
+    }
+}
+
+static void ui_ipc_timer_cb(lv_timer_t *timer)
+{
+    if (!ui_ipc_queue) return;
+
+    ui_ipc_msg_t msg = {};
+    while (xQueueReceive(ui_ipc_queue, &msg, 0) == pdTRUE) {
+        switch (msg.type) {
+            case ui_ipc_type::TIME:
+                update_time_ui_from_tm(&msg.time_payload);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void ui_ipc_init()
+{
+    if (!ui_ipc_queue) {
+        ui_ipc_queue = xQueueCreate(8, sizeof(ui_ipc_msg_t));
+    }
+
+    if (ui_ipc_queue && !ui_ipc_timer) {
+        ui_ipc_timer = lv_timer_create(ui_ipc_timer_cb, 30, NULL);
+    }
+}
+
+bool ui_ipc_post_time(const struct tm &dtinfo)
+{
+    if (!ui_ipc_queue) return false;
+
+    ui_ipc_msg_t msg = {};
+    msg.type = ui_ipc_type::TIME;
+    msg.time_payload = dtinfo;
+    return xQueueSendToBack(ui_ipc_queue, &msg, 0) == pdPASS;
+}
+
+// ============= FILE-BASED WEATHER POLLING =============
+// Reads weather JSON files from /spiffs/weather/<city>.json
+// Updates carousel panels directly - no event callbacks
+
+// Get weather icon string from OWM icon code (e.g., "01d", "10n")
+static const char* get_weather_icon_string(const char* owm_icon)
+{
+    if (!owm_icon || strlen(owm_icon) < 2) return FA_WEATHER_CLOUD;
+
+    // Extract icon number (first 2 chars)
+    char code[3] = {owm_icon[0], owm_icon[1], '\0'};
+
+    if (strcmp(code, "01") == 0) return FA_WEATHER_SUN;       // clear sky
+    if (strcmp(code, "02") == 0) return FA_WEATHER_CLOUD_SUN; // few clouds
+    if (strcmp(code, "03") == 0) return FA_WEATHER_CLOUD;     // scattered clouds
+    if (strcmp(code, "04") == 0) return FA_WEATHER_CLOUD;     // broken clouds
+    if (strcmp(code, "09") == 0) return FA_WEATHER_CLOUD_RAIN; // shower rain
+    if (strcmp(code, "10") == 0) return FA_WEATHER_CLOUD_RAIN; // rain
+    if (strcmp(code, "11") == 0) return FA_WEATHER_CLOUD_BOLT; // thunderstorm
+    if (strcmp(code, "13") == 0) return FA_WEATHER_SNOWFLAKES; // snow
+    if (strcmp(code, "50") == 0) return FA_WEATHER_DROPLET;    // mist
+
+    return FA_WEATHER_CLOUD;  // default
+}
+
+// Get weather icon color based on day/night
+static lv_color_t get_weather_icon_color(const char* owm_icon)
+{
+    if (!owm_icon) return lv_palette_main(LV_PALETTE_BLUE_GREY);
+
+    if (strchr(owm_icon, 'd')) {
+        return lv_color_make(241, 235, 156);  // Day: warm yellow
+    } else {
+        return lv_palette_main(LV_PALETTE_BLUE_GREY);  // Night: blue-grey
+    }
+}
+
+static void poll_weather_files()
+{
+    if (!carousel_widget || carousel_widget->slide_panels.empty()) return;
+    if (!cfg) return;
+
+    int weather_count = cfg->get_weather_location_count();
+    for (int i = 0; i < weather_count && i < (int)carousel_widget->slide_panels.size(); i++) {
+        weather_location_t loc = cfg->get_weather_location(i);
+        if (!loc.enabled) continue;
+
+        // Build filename: /spiffs/weather/<city_lowercase>.json
+        std::string safe_name = loc.city;
+        for (char &c : safe_name) {
+            if (c == ' ') c = '_';
+            else c = tolower(c);
+        }
+        std::string filepath = "/spiffs/weather/" + safe_name + ".json";
+
+        // Read the JSON file
+        FILE *f = fopen(filepath.c_str(), "r");
+        if (!f) {
+            ESP_LOGD(TAG, "Weather file not found: %s", filepath.c_str());
+            continue;
+        }
+
+        // Read file contents
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        if (fsize <= 0 || fsize > 2048) {
+            fclose(f);
+            continue;
+        }
+
+        char *json_buf = (char*)malloc(fsize + 1);
+        if (!json_buf) {
+            fclose(f);
+            continue;
+        }
+
+        size_t read_size = fread(json_buf, 1, fsize, f);
+        fclose(f);
+        json_buf[read_size] = '\0';
+
+        // Parse JSON
+        cJSON *root = cJSON_Parse(json_buf);
+        free(json_buf);
+
+        if (!root) {
+            ESP_LOGW(TAG, "Failed to parse weather JSON: %s", filepath.c_str());
+            continue;
+        }
+
+        // Extract weather data
+        cJSON *name_item = cJSON_GetObjectItem(root, "name");
+        cJSON *main_obj = cJSON_GetObjectItem(root, "main");
+        cJSON *weather_arr = cJSON_GetObjectItem(root, "weather");
+
+        if (!name_item || !main_obj || !weather_arr) {
+            cJSON_Delete(root);
+            continue;
+        }
+
+        const char *city_name = name_item->valuestring;
+        float temp = cJSON_GetObjectItem(main_obj, "temp")->valuedouble;
+        float temp_high = cJSON_GetObjectItem(main_obj, "temp_max")->valuedouble;
+        float temp_low = cJSON_GetObjectItem(main_obj, "temp_min")->valuedouble;
+        int humidity = cJSON_GetObjectItem(main_obj, "humidity")->valueint;
+        int pressure = cJSON_GetObjectItem(main_obj, "pressure")->valueint;
+
+        cJSON *weather_item = cJSON_GetArrayItem(weather_arr, 0);
+        const char *description = weather_item ? cJSON_GetObjectItem(weather_item, "description")->valuestring : "N/A";
+
+        // Update the carousel panel
+        lv_obj_t *panel = carousel_widget->slide_panels[i];
+        if (!panel || !lv_obj_is_valid(panel)) {
+            cJSON_Delete(root);
+            continue;
+        }
+
+        uint32_t child_cnt = lv_obj_get_child_cnt(panel);
+        if (child_cnt < 7) {  // Need 7 children: title, subtitle, value1-4, icon
+            cJSON_Delete(root);
+            continue;
+        }
+
+        // Update labels: children 2-5 are value labels, child 6 is icon
+        lv_obj_t *value1 = lv_obj_get_child(panel, 2);
+        lv_obj_t *value2 = lv_obj_get_child(panel, 3);
+        lv_obj_t *value3 = lv_obj_get_child(panel, 4);
+        lv_obj_t *value4 = lv_obj_get_child(panel, 5);
+        lv_obj_t *icon_lbl = lv_obj_get_child(panel, 6);
+
+        static char temp_buf[32];
+        static char range_buf[128];
+        static char pressure_buf[64];
+
+        if (value1 && lv_obj_is_valid(value1)) {
+            snprintf(temp_buf, sizeof(temp_buf), "%.1f°C", temp);
+            lv_label_set_text(value1, temp_buf);
+        }
+
+        if (value2 && lv_obj_is_valid(value2) && description) {
+            lv_label_set_text(value2, description);
+        }
+
+        if (value3 && lv_obj_is_valid(value3)) {
+            snprintf(range_buf, sizeof(range_buf), "H: %.1f° L: %.1f° • Humidity: %d%%",
+                     temp_high, temp_low, humidity);
+            lv_label_set_text(value3, range_buf);
+        }
+
+        if (value4 && lv_obj_is_valid(value4)) {
+            snprintf(pressure_buf, sizeof(pressure_buf), "Pressure: %d hPa", pressure);
+            lv_label_set_text(value4, pressure_buf);
+        }
+
+        // Update weather icon (child 6)
+        if (icon_lbl && lv_obj_is_valid(icon_lbl)) {
+            cJSON *icon_item = cJSON_GetObjectItem(weather_item, "icon");
+            const char *icon_code = icon_item ? icon_item->valuestring : "01d";
+            const char *icon_str = get_weather_icon_string(icon_code);
+            lv_color_t icon_color = get_weather_icon_color(icon_code);
+            lv_label_set_text(icon_lbl, icon_str);
+            lv_obj_set_style_text_color(icon_lbl, icon_color, 0);
+        }
+
+        ESP_LOGD(TAG, "Updated panel %d from file: %s (%.1f°C)", i, city_name, temp);
+        cJSON_Delete(root);
+    }
+}
+
+static void weather_poll_timer_cb(lv_timer_t *timer)
+{
+    poll_weather_files();
+}
+
+void weather_poll_init()
+{
+    if (!weather_poll_timer) {
+        // Poll weather files every 5 seconds
+        weather_poll_timer = lv_timer_create(weather_poll_timer_cb, 5000, NULL);
+        ESP_LOGI(TAG, "Weather file polling timer started (5s interval)");
+    }
+}
+// ============= END FILE-BASED WEATHER POLLING =============
 
 void datetime_event_cb(lv_event_t * e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    //lv_event_get_target(e) => cont_datetime
     lv_msg_t * m = lv_event_get_msg(e);
     
-    // Not necessary but if event target was button or so, then required
-    if (code == LV_EVENT_MSG_RECEIVED)  
-    {
-        struct tm *dtinfo = (tm*)lv_msg_get_payload(m);
-        // Date & Time formatted
-        char strftime_buf[64];
-        // strftime(strftime_buf, sizeof(strftime_buf), "%c %z", dtinfo);
-        // ESP_LOGW(TAG,"Triggered:datetime_event_cb %s",strftime_buf);
-
-        // Date formatted
-        strftime(strftime_buf, sizeof(strftime_buf), "%a, %e %b %Y", dtinfo);
-        lv_label_set_text_fmt(lbl_date,"%s",strftime_buf);
-
-        // Time in 12hrs 
-        strftime(strftime_buf, sizeof(strftime_buf), "%I:%M", dtinfo);
-        lv_label_set_text_fmt(lbl_time, "%s", strftime_buf);        
-
-        // 12hr clock AM/PM
-        strftime(strftime_buf, sizeof(strftime_buf), "%p", dtinfo);
-        lv_label_set_text_fmt(lbl_ampm, "%s", strftime_buf);        
-    }
-}
-
-void weather_event_cb(lv_event_t * e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_msg_t * m = lv_event_get_msg(e);
+    if (code != LV_EVENT_MSG_RECEIVED) return;
     
-    // Not necessary but if event target was button or so, then required
-    if (code == LV_EVENT_MSG_RECEIVED)  
-    {
-        OpenWeatherMap *e_owm = NULL;
-        e_owm = (OpenWeatherMap*)lv_msg_get_payload(m);
-        //ESP_LOGW(TAG,"weather_event_cb %s",e_owm->LocationName.c_str());
+    struct tm *dtinfo = (struct tm*)lv_msg_get_payload(m);
+    if (!dtinfo) return;
 
-        // set this according to e_owm->WeatherIcon 
-        set_weather_icon(e_owm->WeatherIcon);      
-
-        lv_label_set_text(lbl_temp,fmt::format("{:.1f}°{}",e_owm->Temperature,e_owm->TemperatureUnit).c_str());
-        lv_label_set_text(lbl_hl,fmt::format("H:{:.1f}° L:{:.1f}°",e_owm->TemperatureHigh,e_owm->TemperatureLow).c_str());
-    }
+    // Push into IPC queue so updates are serialized in LVGL timer
+    ui_ipc_post_time(*dtinfo);
 }
+
+// weather_event_cb REMOVED - replaced by file-based polling via poll_weather_files()
 
 static void footer_button_event_handler(lv_event_t * e)
 {

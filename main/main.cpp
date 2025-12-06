@@ -30,10 +30,18 @@ static const char *TAG = "ESP32-TUX";
 
 static void set_timezone()
 {
-    // Update local timezone
-    //setenv("TZ", cfg->TimeZone, 1);
-    setenv("TZ", CONFIG_TIMEZONE_STRING, 1);
-    tzset();    
+    // Prefer timezone from web settings; fall back to a safe default if not set
+    const char *source = "settings default";
+    std::string tz_value = "UTC0";
+
+    if (cfg && !cfg->TimeZone.empty()) {
+        tz_value = cfg->TimeZone;
+        source = "web config";
+    }
+
+    setenv("TZ", tz_value.c_str(), 1);
+    tzset();
+    ESP_LOGI(TAG, "Timezone set to %s (%s)", tz_value.c_str(), source);
 }
 
 // GEt time from internal RTC and update date/time of the clock
@@ -55,8 +63,8 @@ static void update_datetime_ui()
         return;
     }
 
-    // Send update time to UI with payload using lv_msg
-    lv_msg_send(MSG_TIME_CHANGED, &datetimeinfo);
+    // Send update time to UI via IPC queue (LVGL task will consume)
+    ui_ipc_post_time(datetimeinfo);
 }
 
 static const char* get_id_string(esp_event_base_t base, int32_t id) {
@@ -241,6 +249,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         
         // We got IP, lets update time from SNTP. RTC keeps time unless powered off
         xTaskCreate(configure_time, "config_time", 1024*4, NULL, 3, NULL);
+
+        // Kick weather timer but let it run from the LVGL timer context
+        // (avoid heavy work on the sys_evt task stack)
+        if (timer_weather) {
+            lv_timer_ready(timer_weather);
+        }
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP)
     {
@@ -357,6 +371,7 @@ extern "C" void app_main(void)
 
 //******************************************** 
     owm = new OpenWeatherMap();
+    owm->set_config(cfg);  // Share the global config with OpenWeatherMap
     
     // Initialize Bambu Lab printer monitoring (optional)
     if (bambu_helper_init() != ESP_OK) {
@@ -401,6 +416,7 @@ extern "C" void app_main(void)
     lv_setup_styles();    
     show_ui();
     lvgl_release();
+    ui_ipc_init();
 /* Push these to its own UI task later*/
 
 #ifdef SD_SUPPORTED
@@ -465,16 +481,58 @@ static void timer_datetime_callback(lv_timer_t * timer)
     update_datetime_ui();
 }
 
+// Daily API call tracking to stay under OpenWeatherMap free tier limit
+static int weather_api_calls_today = 0;
+static int weather_api_last_reset_day = -1;
+
 static void timer_weather_callback(lv_timer_t * timer)
 {
-    if (cfg->WeatherAPIkey.empty()) {   // If API key not defined skip weather update
+    ESP_LOGD(TAG, "timer_weather_callback fired");
+    if (cfg->WeatherAPIkey.empty()) {
         ESP_LOGW(TAG,"Weather API Key not set");
         return;
     }
 
-    // Update weather and trigger UI update
-    owm->request_weather_update();
-    lv_msg_send(MSG_WEATHER_CHANGED, owm);
+    // Reset daily counter at midnight
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    if (timeinfo.tm_yday != weather_api_last_reset_day) {
+        weather_api_calls_today = 0;
+        weather_api_last_reset_day = timeinfo.tm_yday;
+        ESP_LOGI(TAG, "Weather API daily counter reset");
+    }
+
+    // Count enabled locations
+    int location_count = cfg->get_weather_location_count();
+    int enabled_count = 0;
+    for (int i = 0; i < location_count; i++) {
+        if (cfg->get_weather_location(i).enabled) enabled_count++;
+    }
+
+    // Check if we'd exceed daily limit
+    if (weather_api_calls_today + enabled_count > WEATHER_DAILY_API_LIMIT) {
+        ESP_LOGW(TAG, "Weather API daily limit reached (%d/%d), skipping update",
+                 weather_api_calls_today, WEATHER_DAILY_API_LIMIT);
+        return;
+    }
+
+    // Update weather for all enabled locations
+    for (int i = 0; i < location_count; i++) {
+        weather_location_t loc = cfg->get_weather_location(i);
+        if (loc.enabled) {
+            std::string location_query = loc.city;
+            if (!loc.country.empty()) {
+                location_query += "," + loc.country;
+            }
+            ESP_LOGD(TAG, "Updating weather for: %s (API calls today: %d)",
+                     location_query.c_str(), weather_api_calls_today + 1);
+            owm->request_weather_update(location_query);
+            weather_api_calls_today++;
+            vTaskDelay(pdMS_TO_TICKS(2000));  // Delay between API calls
+        }
+    }
 }
 
 // Callback to notify App UI change
@@ -492,7 +550,7 @@ static void tux_ui_change_cb(void * s, lv_msg_t *m)
         case MSG_PAGE_HOME:
             // Update date/time and current weather
             // Date/time is updated every second anyway
-            lv_msg_send(MSG_WEATHER_CHANGED, owm);
+            // Weather updates via file polling - no event needed
             break;
         case MSG_PAGE_REMOTE:
             // Trigger loading buttons data

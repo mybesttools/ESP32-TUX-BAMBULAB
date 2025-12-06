@@ -148,7 +148,9 @@ char devinfo_data[300] = {0};   // Device info
 static bambu_printer_state_t bambu_printer_state = BAMBU_STATE_OFFLINE;
 static char bambu_status_str[64] = {0};
 
-// Weather update timer - Once per min (60*1000) or maybe once in 10 mins (10*60*1000)
-static constexpr int WEATHER_UPDATE_INTERVAL = 60 * 1000;
+// Weather update timer - 15 minutes (15*60*1000) = 96 updates/day per location
+// With 2 locations: 192 API calls/day (well under 1000 free tier limit)
+static constexpr int WEATHER_UPDATE_INTERVAL = 15 * 60 * 1000;
+static constexpr int WEATHER_DAILY_API_LIMIT = 900;  // Stay under 1000 free tier limit
 
 #endif // TUX_CONF_H
