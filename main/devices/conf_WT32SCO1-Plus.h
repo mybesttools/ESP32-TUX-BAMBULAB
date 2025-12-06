@@ -36,9 +36,9 @@ SOFTWARE.
 #define SD_SCLK       GPIO_NUM_39
 #define SD_CS         GPIO_NUM_41
 
-// Portrait
-#define TFT_WIDTH   320
-#define TFT_HEIGHT  480
+// Landscape
+#define TFT_WIDTH   480
+#define TFT_HEIGHT  320
 
 class LGFX : public lgfx::LGFX_Device
 {
@@ -78,11 +78,11 @@ public:
       cfg.pin_rst          =    4;  
       cfg.pin_busy         =    -1; 
 
-      cfg.panel_width      =   TFT_WIDTH;
-      cfg.panel_height     =   TFT_HEIGHT;
+      cfg.panel_width      =   320;  // Physical panel width
+      cfg.panel_height     =   480;  // Physical panel height
       cfg.offset_x         =     0;
       cfg.offset_y         =     0;
-      cfg.offset_rotation  =     0;
+      cfg.offset_rotation  =     1;  // Rotate 90° for landscape
       cfg.dummy_read_pixel =     8;
       cfg.dummy_read_bits  =     1;
       cfg.readable         =  false;
@@ -110,12 +110,11 @@ public:
       auto cfg = _touch_instance.config();
 
       cfg.x_min      = 0;
-      cfg.x_max      = 319;
+      cfg.x_max      = 319;  // FT5x06 native width
       cfg.y_min      = 0;  
-      cfg.y_max      = 479;
+      cfg.y_max      = 479;  // FT5x06 native height
       cfg.pin_int    = 7;  
-      cfg.bus_shared = true; 
-      cfg.offset_rotation = 0;
+      cfg.bus_shared = false;  // Touch has dedicated I2C bus
 
       cfg.i2c_port = 1;//I2C_NUM_1;
       cfg.i2c_addr = 0x38;

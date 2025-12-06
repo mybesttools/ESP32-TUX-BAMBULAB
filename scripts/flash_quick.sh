@@ -4,7 +4,7 @@
 # This preserves your settings across flashes
 #
 
-PORT=${1:-/dev/cu.SLAB_USBtoUART}
+PORT=${1:-/dev/cu.usbmodem1101}
 
 # Source ESP-IDF if needed
 if [ -z "$IDF_PATH" ]; then
@@ -17,12 +17,12 @@ python3 "$IDF_PATH/components/esptool_py/esptool/esptool.py" \
     -b 460800 \
     --before default_reset \
     --after hard_reset \
-    --chip esp32 \
+    --chip esp32s3 \
     write_flash \
     --flash_mode dio \
-    --flash_size 4MB \
-    --flash_freq 40m \
-    0x1000 build/bootloader/bootloader.bin \
+    --flash_size 8MB \
+    --flash_freq 80m \
+    0x0 build/bootloader/bootloader.bin \
     0x8000 build/partition_table/partition-table.bin \
     0x10000 build/ESP32-TUX.bin
 

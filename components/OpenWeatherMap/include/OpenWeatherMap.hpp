@@ -101,12 +101,16 @@ class OpenWeatherMap
 
         char TemperatureUnit;   // '' / 'F' / 'C'
         string WeatherIcon;
+        string WeatherDescription;  // "overcast clouds"
 
         /* Constructor */
         OpenWeatherMap();
 
+        /* Set SettingsConfig pointer (use shared config instead of creating new one) */
+        void set_config(SettingsConfig *config) { cfg = config; }
+
         /* HTTPS request to the Weather API */
-        void request_weather_update();
+        void request_weather_update(const string &location = "");
 
         /* Handle json response */
 
@@ -116,6 +120,7 @@ class OpenWeatherMap
 
         string file_name; /* Weather cache filename */
         string jsonString;
+        string LocationQuery; /* Current location being queried (City,Country) */
 
         cJSON *root;
         cJSON *maininfo;
@@ -133,6 +138,9 @@ class OpenWeatherMap
 
         /* Write cache json on flash/sdcard */
         void write_json();
+
+        /* Write location-specific cache file for GUI polling */
+        void write_location_cache();
 
         esp_err_t request_json_over_http();        
         esp_err_t request_json_over_https();

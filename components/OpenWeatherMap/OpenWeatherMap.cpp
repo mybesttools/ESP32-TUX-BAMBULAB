@@ -60,10 +60,8 @@ OpenWeatherMap::OpenWeatherMap()
     // Weather cache filename
     file_name = "/spiffs/weather/weather.json";
 
-    // Settings filename / add these after UI has these config options
-    // cfg_filename = "/spiffs/settings.json";
-    // cfg = new SettingsConfig(cfg_filename);
-    // cfg->load_config();
+    // cfg pointer will be set externally via set_config()
+    cfg = nullptr;
 
     // setup default values for everything.
 #if defined(CONFIG_WEATHER_UNITS_METRIC)    
@@ -80,9 +78,33 @@ OpenWeatherMap::OpenWeatherMap()
  * API call can fail => no wifi / connectivity issues / request limits
  * If fails, data from cache file is used.
 */
-void OpenWeatherMap::request_weather_update()
+void OpenWeatherMap::request_weather_update(const string &location_param)
 {
     jsonString = "";
+
+    // Get location from parameter, or from config's WeatherLocations vector
+    LocationQuery = location_param;
+    if (LocationQuery.empty() && cfg) {
+        // Try to get first enabled weather location
+        int location_count = cfg->get_weather_location_count();
+        for (int i = 0; i < location_count; i++) {
+            weather_location_t loc = cfg->get_weather_location(i);
+            if (loc.enabled) {
+                // Format: "City, Country"
+                LocationQuery = loc.city;
+                if (!loc.country.empty()) {
+                    LocationQuery += "," + loc.country;
+                }
+                ESP_LOGI(TAG, "Using weather location: %s", LocationQuery.c_str());
+                break;
+            }
+        }
+    }
+    
+    if (LocationQuery.empty()) {
+        ESP_LOGW(TAG, "Weather API Key not set");
+        return;
+    }
 
     // Get weather from OpenWeatherMap and update the cache file
     if (request_json_over_http() == ESP_OK) {
@@ -94,20 +116,43 @@ void OpenWeatherMap::request_weather_update()
 
     ESP_LOGI(TAG,"Loading - weather.json");
     load_json();
+    
+    // After load_json(), LocationName is set - write location-specific cache file
+    write_location_cache();
 }
 
 void OpenWeatherMap::load_json()
 {
     ESP_LOGW(TAG,"load_json() \n%s",jsonString.c_str());
 
-    // try
-	// {
-
-    // 19.8°С temperature from 18.9°С to 19.8 °С, wind 1.54 m/s. clouds 20 %, 1017 hpa
+    // Parse JSON
     root = cJSON_Parse(jsonString.c_str());
+    
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON");
+        return;
+    }
+    
+    // Check for API error response (cod: 401, etc.)
+    cJSON *cod_item = cJSON_GetObjectItem(root, "cod");
+    if (cod_item && cod_item->valueint != 200) {
+        cJSON *message_item = cJSON_GetObjectItem(root, "message");
+        const char *error_msg = message_item ? message_item->valuestring : "Unknown error";
+        ESP_LOGE(TAG, "OpenWeatherMap API error (code %d): %s", cod_item->valueint, error_msg);
+        cJSON_Delete(root);
+        return;
+    }
+
+    // Check if we have the required fields (name field indicates valid weather data)
+    cJSON *name_item = cJSON_GetObjectItem(root,"name");
+    if (!name_item || !name_item->valuestring) {
+        ESP_LOGE(TAG, "Invalid weather data - missing location name");
+        cJSON_Delete(root);
+        return;
+    }
 
     // name = Bengaluru / What we searched?
-    LocationName = cJSON_GetObjectItem(root,"name")->valuestring;
+    LocationName = name_item->valuestring;
     int root_visibility = cJSON_GetObjectItem(root,"visibility")->valueint;
     ESP_LOGW(TAG,"root: %s / %d",LocationName.c_str(), root_visibility);
 
@@ -136,6 +181,7 @@ void OpenWeatherMap::load_json()
     string weather_main = cJSON_GetObjectItem(weather,"main")->valuestring;
     string weather_description = cJSON_GetObjectItem(weather,"description")->valuestring;
     WeatherIcon = cJSON_GetObjectItem(weather,"icon")->valuestring;
+    WeatherDescription = weather_description;  // Store description
     ESP_LOGW(TAG,"weather: %s / %s / %s",weather_main.c_str(), weather_description.c_str(),WeatherIcon.c_str());
 
     // lon / lat
@@ -185,6 +231,7 @@ void OpenWeatherMap::read_json()
 void OpenWeatherMap::write_json()
 {
     // cache json in flash to show if not online?
+    // Write to default file
     ofstream jsonfile(file_name);
     if (!jsonfile.is_open())
     {
@@ -193,7 +240,30 @@ void OpenWeatherMap::write_json()
     }
     jsonfile << jsonString;
     jsonfile.flush();
-    jsonfile.close();    
+    jsonfile.close();
+}
+
+void OpenWeatherMap::write_location_cache()
+{
+    // Write to location-specific file for GUI polling (called after load_json sets LocationName)
+    if (LocationName.empty() || jsonString.empty()) return;
+    
+    // Create sanitized filename from location name (lowercase, no spaces)
+    string safe_name = LocationName;
+    for (char &c : safe_name) {
+        if (c == ' ') c = '_';
+        else c = tolower(c);
+    }
+    string loc_file = "/spiffs/weather/" + safe_name + ".json";
+    ofstream loc_jsonfile(loc_file);
+    if (loc_jsonfile.is_open()) {
+        loc_jsonfile << jsonString;
+        loc_jsonfile.flush();
+        loc_jsonfile.close();
+        ESP_LOGI(TAG, "Wrote location cache: %s", loc_file.c_str());
+    } else {
+        ESP_LOGE(TAG, "Failed to write location cache: %s", loc_file.c_str());
+    }
 }
 
 esp_err_t http_event_handle(esp_http_client_event_t *evt)
@@ -258,14 +328,28 @@ esp_err_t OpenWeatherMap::request_json_over_http()
     jsonString = "";
     string queryString = "";
 
+    // Get API key from runtime config
+    string api_key = cfg ? cfg->WeatherAPIkey : "";
+    
+    if (api_key.empty()) {
+        ESP_LOGW(TAG, "Weather API Key not set");
+        return ESP_FAIL;
+    }
+    
+    // Use LocationQuery member variable (set by request_weather_update)
+    if (LocationQuery.empty()) {
+        ESP_LOGW(TAG, "No weather location configured");
+        return ESP_FAIL;
+    }
+    
     // units = standard / metric / imperial
     // https://openweathermap.org/weather-data
     #if defined(CONFIG_WEATHER_UNITS_METRIC)    
-            queryString = WEB_API_PATH "?q=" CONFIG_WEATHER_LOCATION "&units=metric&APPID=" CONFIG_WEATHER_API_KEY;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=metric&APPID=" + api_key;
     #elif defined(CONFIG_WEATHER_UNITS_IMPERIAL)
-            queryString = WEB_API_PATH "?q=" CONFIG_WEATHER_LOCATION "&units=imperial&APPID=" CONFIG_WEATHER_API_KEY;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=imperial&APPID=" + api_key;
     #else   // Standard => Kelvin?
-            queryString = WEB_API_PATH "?q=" CONFIG_WEATHER_LOCATION "&APPID=" CONFIG_WEATHER_API_KEY;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&APPID=" + api_key;
     #endif
 
     ESP_LOGI(TAG, "HTTP request to get weather");
