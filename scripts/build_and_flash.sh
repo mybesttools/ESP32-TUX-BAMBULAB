@@ -6,7 +6,7 @@
 
 set -e
 
-PORT=${1:-/dev/cu.usbserial-0251757F}
+PORT=${1:-/dev/cu.usbmodem21201}
 BAUD=${2:-460800}
 
 echo "╔════════════════════════════════════════╗"

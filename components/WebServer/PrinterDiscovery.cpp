@@ -405,16 +405,11 @@ PrinterDiscovery::PrinterStatus PrinterDiscovery::query_printer_status(const std
     
     ESP_LOGI(TAG, "✓ Printer reachable at %s:8883", ip.c_str());
     
-    // Certificate fetch is currently disabled due to memory constraints
-    // Users should extract certificate manually using:
-    // openssl s_client -connect IP:8883 -showcerts < /dev/null 2>/dev/null | openssl x509 -outform PEM
-    ESP_LOGW(TAG, "Certificate auto-fetch disabled - manual extraction required");
-    
-    // For now, return serial from device ID if available in config
-    // Or use a placeholder to indicate MQTT query would be needed
+    // TODO: Implement SSL bypass MQTT discovery
+    // For now, return placeholder - user can manually enter serial number
+    ESP_LOGI(TAG, "MQTT discovery not implemented - user can enter serial manually");
+    status.state = "READY";
     status.serial = "CERT_REQUIRED";
-    status.state = "NEEDS_SETUP";
     
-    ESP_LOGI(TAG, "Serial/cert extraction via MQTT requires pre-configured certificate");
     return status;
 }

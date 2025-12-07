@@ -5,7 +5,7 @@
 # Usage: ./start_monitor.sh [port] [filter_keyword]
 # Example: ./start_monitor.sh /dev/cu.SLAB_USBtoUART Discovery
 
-PORT=${1:-/dev/cu.SLAB_USBtoUART}
+PORT=${1:-/dev/cu.usbmodem21201}
 FILTER=${2:-}
 BAUD=${3:-115200}
 

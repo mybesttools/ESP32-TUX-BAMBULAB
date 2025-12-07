@@ -108,3 +108,39 @@ static esp_err_t bambu_helper_init()
     ESP_LOGI(TAG_BAMBU, "Bambu Monitor initialized successfully");
     return ESP_OK;
 }
+
+/**
+ * @brief Reinitialize Bambu Monitor (e.g., after adding a new printer)
+ * 
+ * Deinitializes and reinitializes BambuMonitor with updated settings.
+ * Call this after modifying printer configuration.
+ * 
+ * @return ESP_OK on success
+ */
+esp_err_t reinit_bambu_monitor()
+{
+    ESP_LOGI(TAG_BAMBU, "Reinitializing Bambu Monitor with updated configuration");
+    
+    // Deinitialize existing instance
+    bambu_monitor_deinit();
+    
+    // Wait a bit for cleanup
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Reinitialize with new config
+    esp_err_t ret = bambu_helper_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG_BAMBU, "Failed to reinitialize Bambu Monitor");
+        return ret;
+    }
+    
+    // Start MQTT connection if WiFi is connected
+    ret = bambu_monitor_start();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG_BAMBU, "Failed to start MQTT after reinit (WiFi may not be ready)");
+        return ret;
+    }
+    
+    ESP_LOGI(TAG_BAMBU, "Bambu Monitor reinitialized and MQTT started");
+    return ESP_OK;
+}

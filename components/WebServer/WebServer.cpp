@@ -202,7 +202,7 @@ static const char *HTML_PAGE = R"rawliteral(
             
             <label>Serial Number:</label>
             <div style="display: flex; gap: 8px;">
-                <input type="text" id="printerSerial" placeholder="Click Fetch to retrieve" readonly style="flex: 1;">
+                <input type="text" id="printerSerial" placeholder="Enter serial or click Fetch" style="flex: 1;">
                 <button id="fetchSerialBtn" onclick="fetchPrinterSerial()" disabled>🔍 Fetch Serial</button>
             </div>
             
@@ -517,9 +517,14 @@ static const char *HTML_PAGE = R"rawliteral(
             const fetchBtn = document.getElementById('fetchSerialBtn');
             fetchBtn.disabled = !(ip && token);
             
-            // Enable Add Printer button only if all fields are filled
+            // Enable Add Printer button if name, IP, and token are filled (serial is optional)
             const addBtn = document.getElementById('addPrinterBtn');
-            addBtn.disabled = !(name && ip && token && serial);
+            addBtn.disabled = !(name && ip && token);
+            
+            // Update status message
+            if (name && ip && token && !serial) {
+                showStatus('printerStatus', 'Serial number optional - you can add it later or fetch it', true);
+            }
         }
         
         function fetchPrinterSerial() {
@@ -1017,6 +1022,14 @@ esp_err_t WebServer::handle_api_printers_post(httpd_req_t *req) {
         
         ESP_LOGI(TAG, "Printer added: %s at %s (serial: %s, SSL verify: %s)", 
                  name, ip, serial ? serial : "", disable_ssl_verify ? "disabled" : "enabled");
+        
+        // Reinitialize BambuMonitor with the new printer configuration
+        extern esp_err_t reinit_bambu_monitor(void);
+        if (reinit_bambu_monitor() == ESP_OK) {
+            ESP_LOGI(TAG, "BambuMonitor reinitialized with new printer");
+        } else {
+            ESP_LOGW(TAG, "Failed to reinitialize BambuMonitor - reboot may be required");
+        }
         
         cJSON *response = cJSON_CreateObject();
         cJSON_AddBoolToObject(response, "success", true);

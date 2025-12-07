@@ -37,6 +37,7 @@ SOFTWARE.
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include <cJSON.h>  // For file-based weather polling
+#include <sys/stat.h>  // For stat() to check file metadata
 
 LV_IMG_DECLARE(dev_bg)
 //LV_IMG_DECLARE(tux_logo)
@@ -122,6 +123,11 @@ void ui_ipc_init();
 static void weather_poll_timer_cb(lv_timer_t *timer);
 static void poll_weather_files();
 static void weather_poll_init();
+
+// Forward declaration for file-based printer polling
+static void printer_poll_timer_cb(lv_timer_t *timer);
+static void poll_printer_files();
+static void printer_poll_init();
 
 static lv_obj_t *label_title;
 static lv_obj_t *label_message;
@@ -871,8 +877,9 @@ static void create_page_home(lv_obj_t *parent)
         
         update_carousel_slides();
         
-        // Start weather file polling timer
+        // Start weather and printer file polling timers
         weather_poll_init();
+        printer_poll_init();
     }
 }
 
@@ -908,19 +915,61 @@ static void update_carousel_slides()
         }
     }
     
-    // Add printer status slides
+    // Add printer status slides (only if online - check SPIFFS cache files)
     if (cfg) {
         int printer_count = cfg->get_printer_count();
+        time_t now = time(NULL);
+        const time_t ONLINE_THRESHOLD = 60;  // Printer is "online" if updated within 60 seconds
+        
         for (int i = 0; i < printer_count; i++) {
             printer_config_t printer = cfg->get_printer(i);
-            if (printer.enabled) {
+            if (!printer.enabled) continue;
+            
+            // Check if printer has recent data (is online)
+            std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+            FILE *f = fopen(filepath.c_str(), "r");
+            bool is_online = false;
+            
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long fsize = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                
+                if (fsize > 0 && fsize <= 20480) {
+                    char *json_buf = (char*)malloc(fsize + 1);
+                    if (json_buf) {
+                        size_t read_size = fread(json_buf, 1, fsize, f);
+                        json_buf[read_size] = '\0';
+                        
+                        cJSON *root = cJSON_Parse(json_buf);
+                        free(json_buf);
+                        
+                        if (root) {
+                            cJSON *last_update = cJSON_GetObjectItem(root, "last_update");
+                            if (last_update) {
+                                time_t update_time = (time_t)last_update->valuedouble;
+                                is_online = (now - update_time) < ONLINE_THRESHOLD;
+                            }
+                            cJSON_Delete(root);
+                        }
+                    }
+                }
+                fclose(f);
+            }
+            
+            // Only add printer to carousel if it's online
+            if (is_online) {
                 carousel_slide_t slide;
                 slide.title = printer.name;
-                slide.subtitle = "Status: Idle";  // Will be updated by BambuMonitor callback
+                slide.subtitle = "Status: Idle";  // Will be updated by printer callback
                 slide.value1 = "0%";  // Progress - will be updated
                 slide.value2 = "Nozzle: 0°C";  // Will be updated
                 slide.bg_color = lv_color_hex(0x3a1e2f);  // Purple printer theme
                 carousel_widget->add_slide(slide);
+                ESP_LOGI(TAG, "Added online printer %s to carousel", printer.name.c_str());
+            } else {
+                ESP_LOGD(TAG, "Printer %s offline or no data, skipping carousel",
+                         printer.name.c_str());
             }
         }
     }
@@ -1563,6 +1612,245 @@ void weather_poll_init()
     }
 }
 // ============= END FILE-BASED WEATHER POLLING =============
+
+// ============= PRINTER FILE-BASED POLLING =============
+static lv_timer_t *printer_poll_timer = nullptr;
+static int last_online_printer_count = -1;  // Track changes in online printer count
+
+static void poll_printer_files()
+{
+    ESP_LOGI(TAG, "poll_printer_files() called, carousel_widget=%p", carousel_widget);
+    
+    if (!carousel_widget) {
+        ESP_LOGW(TAG, "Carousel not initialized yet");
+        return;  // Carousel not initialized yet
+    }
+
+    if (!cfg) {
+        ESP_LOGW(TAG, "Settings config not initialized");
+        return;
+    }
+
+    // Use global cfg pointer (already loaded)
+    int printer_count = cfg->get_printer_count();
+    ESP_LOGI(TAG, "Found %d configured printer(s)", printer_count);
+    
+    if (printer_count == 0) {
+        return;  // No printers configured
+    }
+
+    // Count how many printers are currently online
+    time_t now = time(NULL);
+    const time_t ONLINE_THRESHOLD = 60;
+    int online_count = 0;
+    
+    for (int i = 0; i < printer_count; i++) {
+        printer_config_t printer = cfg->get_printer(i);
+        std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+        ESP_LOGI(TAG, "Checking printer %d: %s (file: %s)", i, printer.serial.c_str(), filepath.c_str());
+        
+        // Use stat to get file metadata instead of opening
+        struct stat file_stat;
+        if (stat(filepath.c_str(), &file_stat) != 0) {
+            ESP_LOGI(TAG, "File not found or inaccessible: %s (errno=%d: %s)", 
+                     filepath.c_str(), errno, strerror(errno));
+            continue;
+        }
+        
+        // Check file size from stat
+        if (file_stat.st_size <= 0) {
+            ESP_LOGD(TAG, "File %s is empty (size=%ld), skipping", filepath.c_str(), (long)file_stat.st_size);
+            continue;
+        }
+        
+        if (file_stat.st_size > 20480) {
+            ESP_LOGW(TAG, "File %s too large: %ld bytes", filepath.c_str(), (long)file_stat.st_size);
+            continue;
+        }
+        
+        ESP_LOGI(TAG, "File size: %ld bytes, mtime: %ld", (long)file_stat.st_size, (long)file_stat.st_mtime);
+        
+        // Now open and read the file
+        FILE *f = fopen(filepath.c_str(), "r");
+        if (!f) {
+            ESP_LOGW(TAG, "Failed to open file: %s", filepath.c_str());
+            continue;
+        }
+        
+        char *json_buf = (char*)malloc(file_stat.st_size + 1);
+        if (!json_buf) {
+            ESP_LOGW(TAG, "Failed to allocate %ld bytes for JSON", (long)file_stat.st_size);
+            fclose(f);
+            continue;
+        }
+        
+        size_t read_size = fread(json_buf, 1, file_stat.st_size, f);
+        fclose(f);
+        
+        if (read_size != (size_t)file_stat.st_size) {
+            ESP_LOGW(TAG, "Read size mismatch: expected %ld, got %zu", (long)file_stat.st_size, read_size);
+            free(json_buf);
+            continue;
+        };
+        json_buf[read_size] = '\0';
+        
+        cJSON *root = cJSON_Parse(json_buf);
+        if (!root) {
+            ESP_LOGW(TAG, "Failed to parse JSON for %s", printer.serial.c_str());
+            free(json_buf);
+            continue;
+        }
+        free(json_buf);
+        
+        cJSON *last_update = cJSON_GetObjectItem(root, "last_update");
+        if (last_update) {
+            time_t update_time = (time_t)last_update->valuedouble;
+            time_t age = now - update_time;
+            ESP_LOGI(TAG, "Printer %s: last_update=%lld, age=%lld seconds, threshold=%lld",
+                     printer.serial.c_str(), (long long)update_time, (long long)age, (long long)ONLINE_THRESHOLD);
+            if (age < ONLINE_THRESHOLD) {
+                ESP_LOGI(TAG, "Printer %s is ONLINE", printer.serial.c_str());
+                online_count++;
+            } else {
+                ESP_LOGW(TAG, "Printer %s is OFFLINE (age=%lld > threshold=%lld)", 
+                         printer.serial.c_str(), (long long)age, (long long)ONLINE_THRESHOLD);
+            }
+        } else {
+            ESP_LOGW(TAG, "Printer %s: no last_update field found in JSON", printer.serial.c_str());
+        }
+        
+        cJSON_Delete(root);
+    }
+    
+    // Rebuild carousel if online printer count changed
+    if (online_count != last_online_printer_count) {
+        ESP_LOGI(TAG, "Printer online status changed: %d -> %d printers online, rebuilding carousel",
+                 last_online_printer_count, online_count);
+        last_online_printer_count = online_count;
+        update_carousel_slides();  // This rebuilds the entire carousel
+        return;  // Carousel rebuilt, slides will update on next poll
+    }
+    
+    // Online count unchanged - just update existing printer slide labels
+    for (size_t i = 1; i < carousel_widget->slides.size(); i++) {
+        carousel_slide_t &slide = carousel_widget->slides[i];
+        
+        // Check if this is a printer slide
+        if (slide.bg_color.full != lv_color_hex(0x3a1e2f).full) {
+            continue;  // Not a printer slide
+        }
+
+        // Find matching printer config by comparing slide title to printer name
+        printer_config_t printer;
+        bool found = false;
+        for (int j = 0; j < printer_count; j++) {
+            printer_config_t p = cfg->get_printer(j);
+            if (p.name == slide.title) {
+                printer = p;
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) continue;
+        
+        std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+        FILE *f = fopen(filepath.c_str(), "r");
+        if (!f) {
+            ESP_LOGD(TAG, "Printer file not found: %s", filepath.c_str());
+            continue;
+        }
+
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        if (fsize <= 0 || fsize > 20480) {
+            fclose(f);
+            continue;
+        }
+
+        char *json_buf = (char*)malloc(fsize + 1);
+        if (!json_buf) {
+            fclose(f);
+            continue;
+        }
+
+        size_t read_size = fread(json_buf, 1, fsize, f);
+        fclose(f);
+        json_buf[read_size] = '\0';
+
+        cJSON *root = cJSON_Parse(json_buf);
+        free(json_buf);
+
+        if (!root) {
+            ESP_LOGW(TAG, "Failed to parse printer JSON: %s", filepath.c_str());
+            continue;
+        }
+
+        // Extract printer data
+        cJSON *nozzle_temp = cJSON_GetObjectItem(root, "nozzle_temper");
+        cJSON *bed_temp = cJSON_GetObjectItem(root, "bed_temper");
+        cJSON *progress = cJSON_GetObjectItem(root, "mc_percent");
+        cJSON *gcode_state = cJSON_GetObjectItem(root, "gcode_state");
+        cJSON *last_update = cJSON_GetObjectItem(root, "last_update");
+
+        int nozzle = nozzle_temp ? (int)nozzle_temp->valuedouble : 0;
+        int bed = bed_temp ? (int)bed_temp->valuedouble : 0;
+        int prog = progress ? (int)progress->valuedouble : 0;
+        const char *state = (gcode_state && gcode_state->valuestring) ? gcode_state->valuestring : "IDLE";
+
+        // Check if printer is online
+        time_t update_time = last_update ? (time_t)last_update->valuedouble : 0;
+        bool is_online = (now - update_time) < ONLINE_THRESHOLD;
+
+        // Update carousel slide data
+        static char subtitle_buf[64];
+        static char value1_buf[32];
+        static char value2_buf[64];
+        static char value3_buf[64];
+
+        if (is_online) {
+            snprintf(subtitle_buf, sizeof(subtitle_buf), "Status: %s", state);
+            snprintf(value1_buf, sizeof(value1_buf), "%d%%", prog);
+            snprintf(value2_buf, sizeof(value2_buf), "Nozzle: %d°C", nozzle);
+            snprintf(value3_buf, sizeof(value3_buf), "Bed: %d°C", bed);
+        } else {
+            snprintf(subtitle_buf, sizeof(subtitle_buf), "Status: Offline");
+            snprintf(value1_buf, sizeof(value1_buf), "--");
+            snprintf(value2_buf, sizeof(value2_buf), "Last seen %ld sec ago", (long)(now - update_time));
+            value3_buf[0] = '\0';  // Empty string
+        }
+
+        slide.subtitle = subtitle_buf;
+        slide.value1 = value1_buf;
+        slide.value2 = value2_buf;
+        slide.value3 = value3_buf;
+
+        // Update the actual UI labels
+        carousel_widget->update_slide_labels(i);
+
+        ESP_LOGI(TAG, "Updated printer %s: %s, %d%%, nozzle=%d°C, bed=%d°C",
+                 printer.name.c_str(), state, prog, nozzle, bed);
+
+        cJSON_Delete(root);
+    }
+}
+
+static void printer_poll_timer_cb(lv_timer_t *timer)
+{
+    poll_printer_files();
+}
+
+void printer_poll_init()
+{
+    if (!printer_poll_timer) {
+        // Poll printer files every 5 seconds
+        printer_poll_timer = lv_timer_create(printer_poll_timer_cb, 5000, NULL);
+        ESP_LOGI(TAG, "Printer file polling timer started (5s interval)");
+    }
+}
+// ============= END PRINTER FILE-BASED POLLING =============
 
 void datetime_event_cb(lv_event_t * e)
 {

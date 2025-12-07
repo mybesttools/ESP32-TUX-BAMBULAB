@@ -48,6 +48,29 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
 - **Purpose**: Step-by-step implementation guide
 - **Audience**: Developers (hands-on)
 - **Time to read**: 45 minutes (implementation time: 4 weeks)
+
+### 5. **MQTT_QUICK_START.md** ⭐ TESTING
+
+- **Purpose**: Quick reference for MQTT setup and testing
+- **Audience**: Developers, testers
+- **Time to read**: 5 minutes
+- **Content**:
+  - Printer discovery commands
+  - MQTT connection testing
+  - ESP32 configuration
+  - Troubleshooting quick reference
+
+### 6. **MQTT_TESTING_GUIDE.md**
+
+- **Purpose**: Comprehensive MQTT testing documentation
+- **Audience**: Developers, QA
+- **Time to read**: 30 minutes
+- **Content**:
+  - Python test script usage
+  - ESP32 configuration details
+  - Log interpretation
+  - Complete troubleshooting guide
+  - MQTT protocol reference
 - **Content**:
   - Phase-by-phase breakdown
   - Code templates for each phase

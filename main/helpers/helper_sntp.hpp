@@ -41,10 +41,15 @@ void sntp_sync_time(struct timeval *tv)
 
 void time_sync_notification_cb(struct timeval *tv)
 {
-    ESP_LOGI(TAG, "Notification of a time synchronization event");
+    ESP_LOGI(TAG, "★★★ Time synchronization event - SNTP sync completed! ★★★");
 
     // Notify about TUX_EVENT_DATETIME_SET / TUX_EVENT_DATETIME_SET event
-    ESP_ERROR_CHECK(esp_event_post(TUX_EVENTS, TUX_EVENT_DATETIME_SET, NULL,0, portMAX_DELAY));
+    esp_err_t ret = esp_event_post(TUX_EVENTS, TUX_EVENT_DATETIME_SET, NULL, 0, portMAX_DELAY);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Posted TUX_EVENT_DATETIME_SET event successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to post TUX_EVENT_DATETIME_SET: %s", esp_err_to_name(ret));
+    }
 }
 
 void configure_time(void *param)
@@ -96,6 +101,11 @@ void configure_time(void *param)
     }
     
     ESP_LOGI(TAG, "Got time - Self-destruct Task :)");
+    
+    // Post datetime set event now that time is synced
+    // The callback may have already fired, but posting again is safe
+    ESP_ERROR_CHECK(esp_event_post(TUX_EVENTS, TUX_EVENT_DATETIME_SET, NULL, 0, portMAX_DELAY));
+    
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
     // Kill the current task (self)
@@ -133,8 +143,10 @@ static void initialize_sntp(void)
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "pool.ntp.org");
     sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+    ESP_LOGI(TAG, "SNTP callback registered: time_sync_notification_cb");
 #ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
     sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
 #endif
     sntp_init();
+    ESP_LOGI(TAG, "SNTP initialized and started");
 }
