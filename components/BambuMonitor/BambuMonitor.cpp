@@ -12,6 +12,9 @@
 #include "mbedtls/pem.h"
 #include <cstring>
 #include <stdlib.h>
+#include <fstream>
+#include <string>
+#include <sys/time.h>
 
 static const char* TAG = "BambuMonitor";
 
@@ -49,9 +52,11 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
             
         case MQTT_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "MQTT Connected to Bambu printer");
-            // Subscribe to printer status topic for all devices
-            int msg_id = esp_mqtt_client_subscribe(mqtt_client, "device/+/report", 1);
-            ESP_LOGI(TAG, "Subscribed to device/+/report (msg_id: %d)", msg_id);
+            // Subscribe to specific printer status topic (wildcards may not be supported)
+            char subscribe_topic[128];
+            snprintf(subscribe_topic, sizeof(subscribe_topic), "device/%s/report", saved_config.device_id);
+            int msg_id = esp_mqtt_client_subscribe(mqtt_client, subscribe_topic, 1);
+            ESP_LOGI(TAG, "Subscribed to %s (msg_id: %d)", subscribe_topic, msg_id);
             current_state = BAMBU_STATE_IDLE;
             break;
         }
@@ -63,23 +68,29 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
         }
             
         case MQTT_EVENT_SUBSCRIBED: {
-            ESP_LOGD(TAG, "MQTT Subscribed (msg_id: %d)", event->msg_id);
+            ESP_LOGI(TAG, "MQTT Subscribed successfully (msg_id: %d)", event->msg_id);
             break;
         }
             
         case MQTT_EVENT_UNSUBSCRIBED: {
-            ESP_LOGD(TAG, "MQTT Unsubscribed (msg_id: %d)", event->msg_id);
+            ESP_LOGI(TAG, "MQTT Unsubscribed (msg_id: %d)", event->msg_id);
             break;
         }
             
         case MQTT_EVENT_PUBLISHED: {
-            ESP_LOGD(TAG, "MQTT Message published (msg_id: %d)", event->msg_id);
+            ESP_LOGI(TAG, "MQTT Message published successfully (msg_id: %d)", event->msg_id);
             break;
         }
             
         case MQTT_EVENT_DATA: {
+            ESP_LOGI(TAG, "MQTT_EVENT_DATA received:");
+            ESP_LOGI(TAG, "  Topic length: %d, Data length: %d", event->topic_len, event->data_len);
+            ESP_LOGI(TAG, "  Current data offset: %d, Total data length: %d", event->current_data_offset, event->total_data_len);
+            
             // Extract topic and payload safely
             char topic[128] = {0};
+            char serial[64] = {0};  // Declare serial here for wider scope
+            
             if (event->topic_len > 0 && event->topic_len < sizeof(topic)) {
                 strncpy(topic, event->topic, event->topic_len);
             }
@@ -91,8 +102,7 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
                 const char* serial_end = strchr(serial_start, '/');
                 if (serial_end) {
                     size_t serial_len = serial_end - serial_start;
-                    if (serial_len > 0 && serial_len < 64) {
-                        char serial[64] = {0};
+                    if (serial_len > 0 && serial_len < sizeof(serial)) {
                         strncpy(serial, serial_start, serial_len);
                         ESP_LOGI(TAG, "Printer serial from MQTT topic: %s", serial);
                         // TODO: Save serial to config if not already set
@@ -100,11 +110,20 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
                 }
             }
             
+            // Log first 200 chars of data for debugging
+            if (event->data && event->data_len > 0) {
+                int log_len = event->data_len < 200 ? event->data_len : 200;
+                char log_buf[201] = {0};
+                strncpy(log_buf, event->data, log_len);
+                ESP_LOGI(TAG, "Data preview (first %d bytes): %s%s", log_len, log_buf, event->data_len > 200 ? "..." : "");
+            }
+            
             ESP_LOGD(TAG, "MQTT Data received on topic: %s (len: %d, data_len: %d)", 
                     topic, event->topic_len, event->data_len);
             
             // Parse JSON payload (limit to reasonable size)
-            if (event->data_len > 0 && event->data_len <= 8192) {
+            // Bambu printers send large JSON payloads (~15KB typical)
+            if (event->data_len > 0 && event->data_len <= 20480) {
                 // Create null-terminated string for JSON parsing
                 char* json_str = (char*)malloc(event->data_len + 1);
                 if (json_str) {
@@ -141,6 +160,31 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
                             ESP_LOGD(TAG, "Temperatures - Nozzle: %d°C, Bed: %d°C",
                                     nozzle_temp ? (int)nozzle_temp->valuedouble : 0,
                                     bed_temp ? (int)bed_temp->valuedouble : 0);
+                        }
+                        
+                        // Write printer data to SPIFFS cache (like weather does)
+                        if (serial[0] != '\0') {  // Only write if we have serial number
+                            // Add timestamp to JSON for online/offline detection
+                            struct timeval tv_now;
+                            gettimeofday(&tv_now, NULL);
+                            cJSON_AddNumberToObject(json_data, "last_update", tv_now.tv_sec);
+                            
+                            // Convert JSON back to string for file writing
+                            char* json_output = cJSON_PrintUnformatted(json_data);
+                            if (json_output) {
+                                // Write to /spiffs/printer/<serial>.json
+                                std::string filename = std::string("/spiffs/printer/") + serial + ".json";
+                                std::ofstream printer_file(filename.c_str());
+                                if (printer_file.is_open()) {
+                                    printer_file << json_output;
+                                    printer_file.flush();
+                                    printer_file.close();
+                                    ESP_LOGI(TAG, "Wrote printer cache: %s", filename.c_str());
+                                } else {
+                                    ESP_LOGW(TAG, "Failed to write printer cache: %s", filename.c_str());
+                                }
+                                cJSON_free(json_output);
+                            }
                         }
                         
                         // Notify registered handler if set
@@ -248,13 +292,13 @@ esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
     mqtt_cfg.credentials.username = "bblp";
     mqtt_cfg.credentials.authentication.password = config->access_code;
     
-    // Buffer settings - Bambu printers send large JSON payloads (10KB+)
-    mqtt_cfg.buffer.size = 16384;       // 16KB receive buffer
-    mqtt_cfg.buffer.out_size = 4096;    // 4KB send buffer
+    // Buffer settings - Bambu printers send VERY large JSON payloads (50KB+)
+    mqtt_cfg.buffer.size = 65536;       // 64KB receive buffer (Bambu sends huge responses)
+    mqtt_cfg.buffer.out_size = 8192;    // 8KB send buffer
     
     // Task settings - increase stack size for larger buffers
     mqtt_cfg.task.priority = 4;         // Priority 4 (lower than LVGL task which is 5)
-    mqtt_cfg.task.stack_size = 8192;    // 8KB stack
+    mqtt_cfg.task.stack_size = 16384;   // 16KB stack (needed for large buffers)
     
     // Session settings
     mqtt_cfg.session.keepalive = 60;
@@ -412,6 +456,11 @@ esp_err_t bambu_send_query(void)
     if (!mqtt_client) {
         ESP_LOGE(TAG, "MQTT client not initialized");
         return ESP_FAIL;
+    }
+    
+    // Log current connection state
+    if (current_state != BAMBU_STATE_IDLE && current_state != BAMBU_STATE_PRINTING) {
+        ESP_LOGW(TAG, "MQTT not connected (state: %d), query may be queued", current_state);
     }
     
     // Build query topic: device/{device_id}/request

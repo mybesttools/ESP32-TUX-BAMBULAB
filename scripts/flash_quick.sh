@@ -4,7 +4,7 @@
 # This preserves your settings across flashes
 #
 
-PORT=${1:-/dev/cu.usbmodem1101}
+PORT=${1:-/dev/cu.usbmodem21201}
 
 # Source ESP-IDF if needed
 if [ -z "$IDF_PATH" ]; then

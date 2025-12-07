@@ -27,6 +27,7 @@ static const char *TAG = "ESP32-TUX";
 #include "WebServer.hpp"
 #include "esp_netif.h"
 #include "mdns_responder.h"
+#include "cJSON.h"
 
 static void set_timezone()
 {
@@ -283,31 +284,25 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-// Bambu Monitor task - polls printer status
+// Bambu Monitor task - polls printer status via MQTT
 static void bambu_monitor_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Bambu Monitor task started");
     TickType_t xLastWakeTime = xTaskGetTickCount();
     
     while (1) {
-        // Poll every 5 seconds
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(5000));
+        // Poll every 10 seconds (avoid flooding MQTT broker)
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10000));
         
-        // Example: Send dummy status updates for now
-        // In a real implementation, this would:
-        // 1. Connect to MQTT broker
-        // 2. Parse printer state messages
-        // 3. Send updates via lv_msg_send()
-        
-        static uint8_t progress = 0;
-        progress = (progress + 5) % 101;  // Demo: increment progress
-        
-        lv_msg_send(MSG_BAMBU_STATUS, (void*)"Printing");
-        lv_msg_send(MSG_BAMBU_PROGRESS, (void*)&progress);
-        
-        char temps[50];
-        snprintf(temps, sizeof(temps), "Bed: 60°C Nozzle: 200°C");
-        lv_msg_send(MSG_BAMBU_TEMPS, (void*)temps);
+        // Send pushall query to get current printer status
+        // Response will be handled by MQTT event handler and written to /spiffs/printer/<serial>.json
+        // GUI timer will read the file and update carousel
+        esp_err_t ret = bambu_send_query();
+        if (ret == ESP_OK) {
+            ESP_LOGD(TAG, "MQTT query sent successfully");
+        } else {
+            ESP_LOGD(TAG, "MQTT query failed (printer may be offline)");
+        }
     }
     
     vTaskDelete(NULL);
@@ -447,6 +442,10 @@ extern "C" void app_main(void)
     // Weather update timer - Once per min (60*1000) or maybe once in 10 mins (10*60*1000)
     timer_weather = lv_timer_create(timer_weather_callback, WEATHER_UPDATE_INTERVAL,  NULL);
 
+    // Printer data update timer - Poll SPIFFS files every 5 seconds (like weather file polling)
+    timer_printer = lv_timer_create(timer_printer_callback, 5000, NULL);
+    ESP_LOGI(TAG, "Printer file polling timer started (5s interval)");
+
     //lv_timer_set_repeat_count(timer_weather,1);
     //lv_timer_pause(timer_weather);  // enable after wifi is connected
 
@@ -532,6 +531,82 @@ static void timer_weather_callback(lv_timer_t * timer)
             weather_api_calls_today++;
             vTaskDelay(pdMS_TO_TICKS(2000));  // Delay between API calls
         }
+    }
+}
+
+// Timer callback to poll printer data files from SPIFFS
+static void timer_printer_callback(lv_timer_t * timer)
+{
+    ESP_LOGI(TAG, "timer_printer_callback fired - checking printer files");
+    
+    // Read all printer JSON files from /spiffs/printer/*.json
+    // Only process files with recent timestamps (online printers)
+    DIR* dir = opendir("/spiffs/printer");
+    if (!dir) {
+        ESP_LOGD(TAG, "Printer directory not found (no printers configured yet)");
+        return;
+    }
+    
+    struct dirent* entry;
+    time_t now = time(NULL);
+    const time_t ONLINE_THRESHOLD = 60;  // Printer is "online" if updated within 60 seconds
+    
+    int online_count = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_type == DT_REG && strstr(entry->d_name, ".json")) {
+            char filepath[384];  // Larger buffer for full path
+            snprintf(filepath, sizeof(filepath), "/spiffs/printer/%s", entry->d_name);
+            
+            // Read file contents
+            std::ifstream printer_file(filepath);
+            if (!printer_file.is_open()) continue;
+            
+            std::string json_str((std::istreambuf_iterator<char>(printer_file)),
+                                 std::istreambuf_iterator<char>());
+            printer_file.close();
+            
+            // Parse JSON
+            cJSON* json = cJSON_Parse(json_str.c_str());
+            if (!json) continue;
+            
+            // Check timestamp
+            cJSON* last_update = cJSON_GetObjectItem(json, "last_update");
+            if (!last_update || !cJSON_IsNumber(last_update)) {
+                cJSON_Delete(json);
+                continue;
+            }
+            
+            time_t update_time = (time_t)last_update->valuedouble;
+            bool is_online = (now - update_time) < ONLINE_THRESHOLD;
+            
+            if (is_online) {
+                online_count++;
+                // Extract key data for logging only - GUI polls files separately
+                cJSON* nozzle_temp = cJSON_GetObjectItem(json, "nozzle_temper");
+                cJSON* bed_temp = cJSON_GetObjectItem(json, "bed_temper");
+                cJSON* progress = cJSON_GetObjectItem(json, "mc_percent");
+                cJSON* gcode_state = cJSON_GetObjectItem(json, "gcode_state");
+                
+                int nozzle = nozzle_temp ? (int)nozzle_temp->valuedouble : 0;
+                int bed = bed_temp ? (int)bed_temp->valuedouble : 0;
+                int prog = progress ? (int)progress->valuedouble : 0;
+                const char* state = (gcode_state && gcode_state->valuestring) ? 
+                                   gcode_state->valuestring : "UNKNOWN";
+                
+                ESP_LOGD(TAG, "Printer %s: nozzle=%d°C, bed=%d°C, progress=%d%%, state=%s",
+                         entry->d_name, nozzle, bed, prog, state);
+            } else {
+                ESP_LOGD(TAG, "Printer %s offline (last update %ld seconds ago)",
+                         entry->d_name, (long)(now - update_time));
+            }
+            
+            cJSON_Delete(json);
+        }
+    }
+    closedir(dir);
+    
+    if (online_count > 0) {
+        ESP_LOGI(TAG, "Found %d online printer(s)", online_count);
     }
 }
 

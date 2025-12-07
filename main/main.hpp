@@ -33,6 +33,10 @@ SOFTWARE.
 #include <cmath>
 #include <inttypes.h>
 #include <string>
+#include <fstream>
+#include <dirent.h>
+#include <sys/time.h>
+#include <sys/stat.h>
 #include <esp_chip_info.h>
 #include <esp_ota_ops.h>
 #include <spi_flash_mmap.h>
@@ -117,6 +121,7 @@ extern WebServer *web_server;
 
 static void timer_datetime_callback(lv_timer_t * timer);
 static void timer_weather_callback(lv_timer_t * timer);
+static void timer_printer_callback(lv_timer_t * timer);
 static void lv_update_battery(uint batval);
 static void tux_ui_change_cb(void * s, lv_msg_t *m);
 
@@ -131,6 +136,7 @@ static int battery_value = 0;
 
 static lv_timer_t * timer_datetime;
 static lv_timer_t * timer_weather;
+static lv_timer_t * timer_printer;
 
 // Take your pick, here is the complete timezone list :)
 // https://en.wikipedia.org/wiki/List_of_tz_database_time_zones

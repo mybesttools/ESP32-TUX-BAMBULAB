@@ -2,6 +2,7 @@
 
 ## Markdown Quality Standards
 
+Wheever creating Markdown, make sure no linting errrors occur!!!
 All generated markdown must follow these linting rules to prevent errors:
 
 ### Heading Hierarchy

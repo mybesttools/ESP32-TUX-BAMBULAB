@@ -4,7 +4,7 @@
 # Uses screen to monitor serial output
 # Usage: ./monitor_simple.sh [port] [baud]
 
-PORT=${1:-/dev/cu.SLAB_USBtoUART}
+PORT=${1:-/dev/cu.usbmodem1401}
 BAUD=${2:-115200}
 
 echo "╔════════════════════════════════════════╗"
