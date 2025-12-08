@@ -59,53 +59,84 @@ static const char* bambu_get_state_str(bambu_printer_state_t state)
 /**
  * @brief Initialize Bambu Monitor with default settings
  * 
- * This function creates a basic configuration and initializes
- * the Bambu Monitor component. Reads from SettingsConfig if available.
+ * This function initializes the multi-printer Bambu Monitor component
+ * and adds all configured printers from SettingsConfig.
+ * Supports up to 6 simultaneous printer connections.
  * 
  * @return ESP_OK on success
  */
 static esp_err_t bambu_helper_init()
 {
-    ESP_LOGI(TAG_BAMBU, "Initializing Bambu Monitor helper");
+    ESP_LOGI(TAG_BAMBU, "Initializing Bambu Monitor helper (multi-printer)");
     
-    // Check if we have a printer configured in settings
-    if (!cfg || cfg->get_printer_count() == 0) {
-        ESP_LOGW(TAG_BAMBU, "No printer configured in settings, skipping Bambu Monitor init");
-        return ESP_ERR_NOT_FOUND;
-    }
-    
-    // Get first enabled printer from config
-    printer_config_t printer = cfg->get_printer(0);
-    if (!printer.enabled) {
-        ESP_LOGW(TAG_BAMBU, "First printer is disabled, skipping Bambu Monitor init");
-        return ESP_ERR_NOT_FOUND;
-    }
-    
-    if (printer.ip_address.empty() || printer.token.empty()) {
-        ESP_LOGW(TAG_BAMBU, "Printer IP or access code not configured");
-        return ESP_ERR_INVALID_ARG;
-    }
-    
-    ESP_LOGI(TAG_BAMBU, "Using printer: %s at %s", printer.name.c_str(), printer.ip_address.c_str());
-    
-    // Create Bambu printer configuration
-    bambu_printer_config_t bambu_config = {
-        .device_id = (char*)printer.serial.c_str(),
-        .ip_address = (char*)printer.ip_address.c_str(),
-        .port = 8883,                          // MQTT secure port
-        .access_code = (char*)printer.token.c_str(),
-        .tls_certificate = NULL,               // Not used with skip_verify
-        .disable_ssl_verify = printer.disable_ssl_verify,
-    };
-    
-    // Initialize Bambu Monitor
-    esp_err_t ret = bambu_monitor_init(&bambu_config);
+    // Initialize the monitor system first
+    esp_err_t ret = bambu_monitor_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG_BAMBU, "Failed to initialize Bambu Monitor: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG_BAMBU, "Failed to initialize Bambu Monitor system");
         return ret;
     }
     
-    ESP_LOGI(TAG_BAMBU, "Bambu Monitor initialized successfully");
+    // Check if we have any printers configured
+    if (!cfg || cfg->get_printer_count() == 0) {
+        ESP_LOGW(TAG_BAMBU, "No printers configured in settings");
+        return ESP_ERR_NOT_FOUND;
+    }
+    
+    int printer_count = cfg->get_printer_count();
+    int added = 0;
+    
+    ESP_LOGI(TAG_BAMBU, "Found %d configured printer(s), adding up to %d", 
+             printer_count, BAMBU_MAX_PRINTERS);
+    
+    // Add all enabled printers (up to BAMBU_MAX_PRINTERS)
+    for (int i = 0; i < printer_count && added < BAMBU_MAX_PRINTERS; i++) {
+        printer_config_t printer = cfg->get_printer(i);
+        
+        if (!printer.enabled) {
+            ESP_LOGD(TAG_BAMBU, "Printer %d (%s) is disabled, skipping", i, printer.name.c_str());
+            continue;
+        }
+        
+        if (printer.ip_address.empty() || printer.token.empty()) {
+            ESP_LOGW(TAG_BAMBU, "Printer %d (%s) missing IP or access code, skipping", 
+                     i, printer.name.c_str());
+            continue;
+        }
+        
+        if (printer.serial.empty()) {
+            ESP_LOGW(TAG_BAMBU, "Printer %d (%s) missing serial number, skipping", 
+                     i, printer.name.c_str());
+            continue;
+        }
+        
+        ESP_LOGI(TAG_BAMBU, "Adding printer %d: %s at %s (serial: %s)", 
+                 i, printer.name.c_str(), printer.ip_address.c_str(), printer.serial.c_str());
+        
+        // Create Bambu printer configuration
+        bambu_printer_config_t bambu_config = {
+            .device_id = (char*)printer.serial.c_str(),
+            .ip_address = (char*)printer.ip_address.c_str(),
+            .port = 8883,
+            .access_code = (char*)printer.token.c_str(),
+            .tls_certificate = NULL,
+            .disable_ssl_verify = printer.disable_ssl_verify,
+        };
+        
+        int idx = bambu_add_printer(&bambu_config);
+        if (idx >= 0) {
+            ESP_LOGI(TAG_BAMBU, "Printer %s added at slot %d", printer.name.c_str(), idx);
+            added++;
+        } else {
+            ESP_LOGE(TAG_BAMBU, "Failed to add printer %s", printer.name.c_str());
+        }
+    }
+    
+    if (added == 0) {
+        ESP_LOGW(TAG_BAMBU, "No printers were added");
+        return ESP_ERR_NOT_FOUND;
+    }
+    
+    ESP_LOGI(TAG_BAMBU, "Bambu Monitor initialized with %d printer(s)", added);
     return ESP_OK;
 }
 
@@ -124,8 +155,8 @@ esp_err_t reinit_bambu_monitor()
     // Deinitialize existing instance
     bambu_monitor_deinit();
     
-    // Wait a bit for cleanup
-    vTaskDelay(pdMS_TO_TICKS(100));
+    // Wait for TLS memory cleanup (each connection needs ~17KB)
+    vTaskDelay(pdMS_TO_TICKS(1000));
     
     // Reinitialize with new config
     esp_err_t ret = bambu_helper_init();

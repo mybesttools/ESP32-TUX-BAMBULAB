@@ -25,9 +25,43 @@ SOFTWARE.
 static const char *TAG = "ESP32-TUX";
 #include "main.hpp"
 #include "WebServer.hpp"
+#include "events/gui_events.hpp"
 #include "esp_netif.h"
 #include "mdns_responder.h"
 #include "cJSON.h"
+#include <sys/stat.h>
+
+// Storage paths for printer cache - prefer SD card over SPIFFS
+#define SDCARD_PRINTER_PATH "/sdcard/printer"
+#define SPIFFS_PRINTER_PATH "/spiffs/printer"
+
+// Async callback for config changes - runs in LVGL context safely
+static void config_changed_async_cb(void *data) {
+    ESP_LOGI(TAG, "Config changed async - updating language and sending MSG_CONFIG_CHANGED");
+    // Update language from config
+    if (cfg && !cfg->Language.empty()) {
+        set_language_from_code(cfg->Language.c_str());
+    }
+    lv_msg_send(MSG_CONFIG_CHANGED, NULL);
+}
+
+// Get the printer storage path (SD card if available, else SPIFFS)
+static const char* get_printer_storage_path() {
+    struct stat st;
+    if (stat("/sdcard", &st) == 0 && S_ISDIR(st.st_mode)) {
+        // Ensure printer directory exists on SD card
+        if (stat(SDCARD_PRINTER_PATH, &st) != 0) {
+            mkdir(SDCARD_PRINTER_PATH, 0755);
+        }
+        return SDCARD_PRINTER_PATH;
+    }
+    return SPIFFS_PRINTER_PATH;
+}
+
+// Get full path to a printer cache file
+static std::string get_printer_file_path(const std::string& serial) {
+    return std::string(get_printer_storage_path()) + "/" + serial + ".json";
+}
 
 static void set_timezone()
 {
@@ -89,6 +123,8 @@ static const char* get_id_string(esp_event_base_t base, int32_t id) {
                 return "TUX_EVENT_WEATHER_UPDATED";
             case TUX_EVENT_THEME_CHANGED:
                 return "TUX_EVENT_THEME_CHANGED";
+            case TUX_EVENT_CONFIG_CHANGED:
+                return "TUX_EVENT_CONFIG_CHANGED";
             default:
                 return "TUX_EVENT_UNKNOWN";        
         }
@@ -166,6 +202,12 @@ static void tux_event_handler(void* arg, esp_event_base_t event_base,
 
     } else if (event_id == TUX_EVENT_THEME_CHANGED) {
         // Theme changes - time to play with dark & light
+
+    } else if (event_id == TUX_EVENT_CONFIG_CHANGED) {
+        // Config changed via web UI - rebuild carousel
+        // Use lv_async_call to safely call LVGL from event handler context
+        ESP_LOGI(TAG, "Config changed, scheduling carousel rebuild");
+        lv_async_call(config_changed_async_cb, NULL);
     }
 }                          
 
@@ -327,6 +369,11 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(err); 
 
+    // Initialize TCP/IP stack early (before WiFi provisioning and WebServer)
+    // This must happen before any networking code runs
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
     // Init SPIFF - needed for lvgl images
     init_spiff();
 
@@ -339,11 +386,23 @@ extern "C" void app_main(void)
 #endif   
 //********************** CONFIG HELPER TESTING STARTS
 
-     //cfg = new SettingsConfig("/sdcard/settings.json");    // yet to test
-    cfg = new SettingsConfig("/spiffs/settings.json");
+    // Use SD card for config if available, otherwise fall back to SPIFFS
+    if (is_sdcard_enabled) {
+        cfg = new SettingsConfig("/sdcard/settings.json");
+        ESP_LOGI(TAG, "Using SD card for config storage");
+    } else {
+        cfg = new SettingsConfig("/spiffs/settings.json");
+        ESP_LOGI(TAG, "Using SPIFFS for config storage (SD card not available)");
+    }
     
     // Load existing config first to check if it's new or existing
     cfg->load_config();
+    
+    // Set UI language from config
+    if (!cfg->Language.empty()) {
+        set_language_from_code(cfg->Language.c_str());
+        ESP_LOGI(TAG, "UI language set to: %s", cfg->Language.c_str());
+    }
     
     // Only apply defaults and re-save if this is a fresh config (no weather locations yet)
     if (cfg->get_weather_location_count() == 0) {
@@ -355,8 +414,9 @@ extern "C" void app_main(void)
         cfg->Brightness = 250;
         
         // Initialize default weather locations
-        cfg->add_weather_location("Home", "Kleve", "Germany", 51.7934f, 6.1368f);
-        cfg->add_weather_location("Reference", "Amsterdam", "Netherlands", 52.3676f, 4.9041f);
+        cfg->add_weather_location("Home", "Bedburg-Hau", "Germany", 51.761f, 6.1763f);
+        cfg->add_weather_location("Reference", "Warsaw", "Poland", 52.2298f, 21.0118f);
+        cfg->add_weather_location("Travel", "Amsterdam", "Netherlands", 52.374f, 4.8897f);
         cfg->save_config();
         ESP_LOGI(TAG, "Initialized default configuration");
     } else {
@@ -383,8 +443,7 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "LVGL setup failed!!!");
     }
 
-    // /* Initialize the event loop */
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // Event loop already initialized at start of app_main()
 
     /* Register for event handler for Wi-Fi, IP related events */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
@@ -534,16 +593,17 @@ static void timer_weather_callback(lv_timer_t * timer)
     }
 }
 
-// Timer callback to poll printer data files from SPIFFS
+// Timer callback to poll printer data files from SD card or SPIFFS
 static void timer_printer_callback(lv_timer_t * timer)
 {
     ESP_LOGI(TAG, "timer_printer_callback fired - checking printer files");
     
-    // Read all printer JSON files from /spiffs/printer/*.json
+    // Read all printer JSON files from SD card or SPIFFS
     // Only process files with recent timestamps (online printers)
-    DIR* dir = opendir("/spiffs/printer");
+    const char* printer_path = get_printer_storage_path();
+    DIR* dir = opendir(printer_path);
     if (!dir) {
-        ESP_LOGD(TAG, "Printer directory not found (no printers configured yet)");
+        ESP_LOGD(TAG, "Printer directory not found: %s", printer_path);
         return;
     }
     
@@ -555,7 +615,7 @@ static void timer_printer_callback(lv_timer_t * timer)
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_REG && strstr(entry->d_name, ".json")) {
             char filepath[384];  // Larger buffer for full path
-            snprintf(filepath, sizeof(filepath), "/spiffs/printer/%s", entry->d_name);
+            snprintf(filepath, sizeof(filepath), "%s/%s", printer_path, entry->d_name);
             
             // Read file contents
             std::ifstream printer_file(filepath);

@@ -19,6 +19,7 @@ Copyright (c) 2024 ESP32-TUX Contributors
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
+#include "events/tux_events.hpp"
 
 static const char *TAG = "WebServer";
 
@@ -112,6 +113,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 </optgroup>
             </select>
             
+            <input type="hidden" id="language" value="pl">
+            
             <div class="button-group">
                 <button onclick="saveSettings()">💾 Save Settings</button>
                 <button onclick="loadSettings()">🔄 Load Settings</button>
@@ -202,9 +205,10 @@ static const char *HTML_PAGE = R"rawliteral(
             
             <label>Serial Number:</label>
             <div style="display: flex; gap: 8px;">
-                <input type="text" id="printerSerial" placeholder="Enter serial or click Fetch" style="flex: 1;">
+                <input type="text" id="printerSerial" placeholder="e.g., 0309DA541804686 (REQUIRED for A1 Mini)" style="flex: 1;">
                 <button id="fetchSerialBtn" onclick="fetchPrinterSerial()" disabled>🔍 Fetch Serial</button>
             </div>
+            <p style="font-size: 11px; color: #f0ad4e; margin: -5px 0 10px 0;">⚠️ A1 Mini REQUIRES serial number. Find it in Bambu app → Device → Settings → Device Info</p>
             
             <div class="button-group">
                 <button id="addPrinterBtn" onclick="addPrinter()" disabled>➕ Add Printer</button>
@@ -284,7 +288,8 @@ static const char *HTML_PAGE = R"rawliteral(
             const data = {
                 brightness: parseInt(document.getElementById('brightness').value),
                 theme: document.getElementById('theme').value,
-                timezone: document.getElementById('timezone').value
+                timezone: document.getElementById('timezone').value,
+                language: document.getElementById('language').value
             };
             
             fetch(apiBase + '/api/config', {
@@ -305,6 +310,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 document.getElementById('brightnessVal').textContent = d.brightness;
                 document.getElementById('theme').value = d.theme;
                 document.getElementById('timezone').value = d.timezone;
+                document.getElementById('language').value = d.language || 'en';
             })
             .catch(e => showStatus('settingsStatus', 'Error loading: ' + e, false));
         }
@@ -532,40 +538,39 @@ static const char *HTML_PAGE = R"rawliteral(
             const token = document.getElementById('printerToken').value;
             
             if (!ip || !token) {
-                showStatus('printerStatus', 'IP and token required', false);
+                showStatus('printerStatus', 'IP and Access Code required', false);
                 return;
             }
             
             const statusElem = document.getElementById('printerStatus');
-            statusElem.textContent = '🔒 Fetching TLS certificate...';
+            statusElem.textContent = '📡 Querying printer via MQTT (up to 15s)...';
             statusElem.className = 'status success';
             document.getElementById('fetchSerialBtn').disabled = true;
             
-            // Small delay to show certificate fetch message
-            setTimeout(() => {
-                statusElem.textContent = '📡 Querying printer via MQTT...';
-                
-                // Call our ESP32 backend to query the printer via MQTT
-                fetch(apiBase + `/api/printer/query?ip=${encodeURIComponent(ip)}&code=${encodeURIComponent(token)}`)
-                .then(r => r.json())
-                .then(d => {
-                    if (d.success && d.serial) {
-                        document.getElementById('printerSerial').value = d.serial;
-                        statusElem.textContent = '✓ Serial and TLS certificate fetched successfully!';
-                        statusElem.className = 'status success';
-                        validatePrinterForm(); // Re-check if Add Printer should be enabled
-                    } else {
-                        statusElem.textContent = 'Error: ' + (d.error || 'Could not fetch serial');
-                        statusElem.className = 'status error';
-                        document.getElementById('fetchSerialBtn').disabled = false;
-                    }
-                })
-                .catch(e => {
-                    statusElem.textContent = 'Could not fetch serial: ' + e;
+            // Call our ESP32 backend to query the printer via MQTT
+            fetch(apiBase + `/api/printer/query?ip=${encodeURIComponent(ip)}&code=${encodeURIComponent(token)}`, {
+                signal: AbortSignal.timeout(20000)  // 20 second fetch timeout
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success && d.serial) {
+                    document.getElementById('printerSerial').value = d.serial;
+                    statusElem.textContent = '✓ Serial fetched: ' + d.serial;
+                    statusElem.className = 'status success';
+                    validatePrinterForm();
+                } else {
+                    statusElem.innerHTML = '✗ ' + (d.error || 'Could not fetch serial') + '<br>' +
+                        '<small>Find serial: Printer Display → Settings → Network → Device Info</small>';
                     statusElem.className = 'status error';
-                    document.getElementById('fetchSerialBtn').disabled = false;
-                });
-            }, 100);
+                }
+                document.getElementById('fetchSerialBtn').disabled = false;
+            })
+            .catch(e => {
+                statusElem.innerHTML = '✗ Query timed out<br>' +
+                    '<small>Find serial: Printer Display → Settings → Network → Device Info</small>';
+                statusElem.className = 'status error';
+                document.getElementById('fetchSerialBtn').disabled = false;
+            });
         }
         
         function addPrinter() {
@@ -744,6 +749,7 @@ esp_err_t WebServer::handle_api_config_get(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "brightness", cfg->Brightness);
     cJSON_AddStringToObject(root, "theme", cfg->CurrentTheme.c_str());
     cJSON_AddStringToObject(root, "timezone", cfg->TimeZone.c_str());
+    cJSON_AddStringToObject(root, "language", cfg->Language.c_str());
     
     char *json_str = cJSON_PrintUnformatted(root);
     httpd_resp_set_type(req, "application/json");
@@ -777,8 +783,14 @@ esp_err_t WebServer::handle_api_config_post(httpd_req_t *req) {
     if (cJSON_HasObjectItem(data, "timezone")) {
         cfg->TimeZone = cJSON_GetObjectItem(data, "timezone")->valuestring;
     }
+    if (cJSON_HasObjectItem(data, "language")) {
+        cfg->Language = cJSON_GetObjectItem(data, "language")->valuestring;
+    }
     
     cfg->save_config();
+    
+    // Notify GUI that config changed - update language and rebuild UI
+    esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
     
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);
@@ -832,6 +844,9 @@ esp_err_t WebServer::handle_api_weather_post(httpd_req_t *req) {
     }
     
     cfg->save_config();
+    
+    // Notify GUI that config changed - rebuild carousel (API key affects weather display)
+    esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
     
     cJSON *response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "success", true);
@@ -905,6 +920,9 @@ esp_err_t WebServer::handle_api_locations_post(httpd_req_t *req) {
             cfg->add_weather_location(name, city, country, latitude, longitude);
             cfg->save_config();
             
+            // Notify GUI that config changed - rebuild carousel
+            esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
+            
             ESP_LOGI(TAG, "Location added: %s (%s, %s) at %.4f, %.4f", 
                      name, city, country, latitude, longitude);
             
@@ -938,6 +956,9 @@ esp_err_t WebServer::handle_api_locations_delete(httpd_req_t *req) {
             if (cfg) {
                 cfg->remove_weather_location(index);
                 cfg->save_config();
+                
+                // Notify GUI that config changed - rebuild carousel
+                esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
                 
                 ESP_LOGI(TAG, "Location removed: index %d", index);
                 
@@ -1020,6 +1041,9 @@ esp_err_t WebServer::handle_api_printers_post(httpd_req_t *req) {
         
         cfg->save_config();
         
+        // Notify GUI that config changed - rebuild carousel
+        esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
+        
         ESP_LOGI(TAG, "Printer added: %s at %s (serial: %s, SSL verify: %s)", 
                  name, ip, serial ? serial : "", disable_ssl_verify ? "disabled" : "enabled");
         
@@ -1058,6 +1082,9 @@ esp_err_t WebServer::handle_api_printers_delete(httpd_req_t *req) {
             if (cfg) {
                 cfg->remove_printer(index);
                 cfg->save_config();
+                
+                // Notify GUI that config changed - rebuild carousel
+                esp_event_post(TUX_EVENTS, TUX_EVENT_CONFIG_CHANGED, NULL, 0, pdMS_TO_TICKS(100));
                 
                 ESP_LOGI(TAG, "Printer removed: index %d", index);
                 
@@ -1285,8 +1312,8 @@ esp_err_t WebServer::handle_api_printer_query(httpd_req_t *req) {
         return ESP_OK;
     }
     
-    // Query printer status via MQTT
-    PrinterDiscovery::PrinterStatus status = PrinterDiscovery::query_printer_status(ip_str, code_str, 5000);
+    // Query printer status via MQTT - 10 second timeout to wait for periodic report
+    PrinterDiscovery::PrinterStatus status = PrinterDiscovery::query_printer_status(ip_str, code_str, 10000);
     
     cJSON *root = cJSON_CreateObject();
     

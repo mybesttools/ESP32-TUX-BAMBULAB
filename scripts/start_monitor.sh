@@ -5,7 +5,17 @@
 # Usage: ./start_monitor.sh [port] [filter_keyword]
 # Example: ./start_monitor.sh /dev/cu.SLAB_USBtoUART Discovery
 
-PORT=${1:-/dev/cu.usbmodem21201}
+# Auto-detect USB port if not provided
+if [ -n "$1" ]; then
+    PORT="$1"
+elif [ -e /dev/cu.usbmodem21201 ]; then
+    PORT="/dev/cu.usbmodem21201"
+elif [ -e /dev/cu.usbmodem1101 ]; then
+    PORT="/dev/cu.usbmodem1101"
+else
+    echo "Error: No USB device found. Connect your ESP32 or specify port manually."
+    exit 1
+fi
 FILTER=${2:-}
 BAUD=${3:-115200}
 

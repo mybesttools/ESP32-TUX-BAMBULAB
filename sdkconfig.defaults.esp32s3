@@ -8,4 +8,12 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 
+# Enable FAT long filenames for SD card (printer serials are 15+ chars)
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# mbedTLS: Use PSRAM (external memory) for TLS buffers
+# Critical for multi-printer MQTT connections - each TLS session needs ~17KB
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
 

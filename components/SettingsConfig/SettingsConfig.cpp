@@ -24,7 +24,83 @@ SOFTWARE.
 
 #include "SettingsConfig.hpp"
 #include <vector>
+#include <sys/stat.h>
 static const char* TAG = "SettingsConfig";
+
+// Storage paths - prefer SD card over SPIFFS
+#define SDCARD_SETTINGS_PATH "/sdcard/settings.json"
+#define SPIFFS_SETTINGS_PATH "/spiffs/settings.json"
+
+/**
+ * @brief Check if SD card is available and writable
+ */
+static bool is_sdcard_available() {
+    struct stat st;
+    
+    // Check if /sdcard is mounted
+    if (stat("/sdcard", &st) != 0 || !S_ISDIR(st.st_mode)) {
+        return false;
+    }
+    
+    // Try to create/open a test file to verify write access
+    FILE* test = fopen("/sdcard/.settings_test", "w");
+    if (!test) {
+        return false;
+    }
+    fprintf(test, "test");
+    fclose(test);
+    remove("/sdcard/.settings_test");
+    
+    return true;
+}
+
+/**
+ * @brief Get the best available settings file path
+ * Prefers SD card if available, falls back to SPIFFS
+ */
+static string get_settings_path() {
+    // First check if settings exist on SD card
+    struct stat st;
+    if (stat(SDCARD_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
+        ESP_LOGI(TAG, "Using settings from SD card: %s", SDCARD_SETTINGS_PATH);
+        return SDCARD_SETTINGS_PATH;
+    }
+    
+    // Check if settings exist on SPIFFS
+    if (stat(SPIFFS_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
+        // If SD card is available, migrate settings to SD card
+        if (is_sdcard_available()) {
+            ESP_LOGI(TAG, "Migrating settings from SPIFFS to SD card");
+            // Read from SPIFFS
+            ifstream src(SPIFFS_SETTINGS_PATH);
+            if (src.is_open()) {
+                string content((std::istreambuf_iterator<char>(src)),
+                               std::istreambuf_iterator<char>());
+                src.close();
+                
+                // Write to SD card
+                ofstream dst(SDCARD_SETTINGS_PATH);
+                if (dst.is_open()) {
+                    dst << content;
+                    dst.close();
+                    ESP_LOGI(TAG, "Settings migrated to SD card: %s", SDCARD_SETTINGS_PATH);
+                    return SDCARD_SETTINGS_PATH;
+                }
+            }
+        }
+        ESP_LOGI(TAG, "Using settings from SPIFFS: %s", SPIFFS_SETTINGS_PATH);
+        return SPIFFS_SETTINGS_PATH;
+    }
+    
+    // No existing settings - use SD card if available, else SPIFFS
+    if (is_sdcard_available()) {
+        ESP_LOGI(TAG, "New settings will be stored on SD card: %s", SDCARD_SETTINGS_PATH);
+        return SDCARD_SETTINGS_PATH;
+    }
+    
+    ESP_LOGI(TAG, "New settings will be stored on SPIFFS: %s", SPIFFS_SETTINGS_PATH);
+    return SPIFFS_SETTINGS_PATH;
+}
 
 SettingsConfig::SettingsConfig(string filename)
 {
@@ -48,10 +124,13 @@ SettingsConfig::SettingsConfig(string filename)
     WeatherProvider = "OpenWeatherMaps";
     WeatherLocation = "Bangalore, India";
     WeatherAPIkey = "";
+    Language = "pl";                   // Polish language
     WeatherUpdateInterval = 5 * 60;    // Every 5mins
     TemperatureUnits = WEATHER_UNITS_CELSIUS;
 
-    file_name = filename;
+    // Use the best available path - SD card preferred over SPIFFS
+    // The filename parameter is kept for backward compatibility but we determine the actual path
+    file_name = get_settings_path();
 }
 
 void SettingsConfig::load_config()
@@ -112,6 +191,11 @@ void SettingsConfig::load_config()
         cJSON *weather_apikey_item = cJSON_GetObjectItem(settings,"weather_apikey");
         if (weather_apikey_item && weather_apikey_item->valuestring) {
             this->WeatherAPIkey = weather_apikey_item->valuestring;
+        }
+        
+        cJSON *weather_lang_item = cJSON_GetObjectItem(settings,"language");
+        if (weather_lang_item && weather_lang_item->valuestring) {
+            this->Language = weather_lang_item->valuestring;
         }
         
         cJSON *weather_interval_item = cJSON_GetObjectItem(settings,"weather_update_interval");
@@ -227,6 +311,7 @@ void SettingsConfig::save_config()
     cJSON_AddStringToObject(settings, "weather_provider", this->WeatherProvider.c_str());
     cJSON_AddStringToObject(settings, "weather_location", this->WeatherLocation.c_str());
     cJSON_AddStringToObject(settings, "weather_apikey", this->WeatherAPIkey.c_str());
+    cJSON_AddStringToObject(settings, "language", this->Language.c_str());
     cJSON_AddNumberToObject(settings, "weather_update_interval", this->WeatherUpdateInterval);
     cJSON_AddNumberToObject(settings, "temperature_units", this->TemperatureUnits);
 

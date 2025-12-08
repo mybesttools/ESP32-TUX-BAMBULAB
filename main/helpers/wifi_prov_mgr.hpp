@@ -198,8 +198,8 @@ static void wifi_prov_print_qr(const char *name, const char *pop, const char *tr
 
 void provision_wifi(void *param)
 {
-    /* Initialize TCP/IP */
-    ESP_ERROR_CHECK(esp_netif_init());
+    /* TCP/IP already initialized in app_main() */
+    // ESP_ERROR_CHECK(esp_netif_init());  // Moved to app_main
 
     wifi_event_group = xEventGroupCreate();
 
