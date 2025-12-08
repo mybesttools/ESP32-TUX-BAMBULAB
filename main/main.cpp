@@ -395,6 +395,100 @@ static void storage_health_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief Periodic snapshot capture task
+ * Captures camera snapshots for busy printers or printers that just finished.
+ * Clears snapshots when printer is idle with 0% progress.
+ * 
+ * Logic:
+ * - BUSY or progress > 0%: capture snapshot
+ * - IDLE with 0% progress: delete snapshot (printer truly idle)
+ * - IDLE with 100% progress: keep snapshot (just finished printing)
+ */
+static void snapshot_capture_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Snapshot capture task started");
+    
+    // Wait for system to stabilize before starting captures
+    vTaskDelay(pdMS_TO_TICKS(30000));
+    ESP_LOGI(TAG, "Snapshot capture: initial delay complete, starting captures");
+    
+    while (1) {
+        
+        // Get list of configured printers
+        size_t count = bambu_get_printer_count();
+        if (count == 0) {
+            ESP_LOGD(TAG, "No printers configured, skipping snapshot capture");
+            vTaskDelay(pdMS_TO_TICKS(60000));
+            continue;
+        }
+        
+        ESP_LOGI(TAG, "Snapshot capture cycle: checking %zu printers", count);
+        
+        // Check available memory before starting captures
+        size_t free_heap = esp_get_free_heap_size();
+        if (free_heap < 150000) {  // Need ~150KB for SSL + JPEG buffer
+            ESP_LOGW(TAG, "Snapshot capture: low memory (%zu bytes), skipping this cycle", free_heap);
+            vTaskDelay(pdMS_TO_TICKS(60000));
+            continue;
+        }
+        ESP_LOGI(TAG, "Snapshot capture: free heap = %zu bytes", free_heap);
+        
+        for (size_t i = 0; i < count; i++) {
+            const char* device_id = bambu_get_device_id(i);
+            if (!device_id) {
+                ESP_LOGI(TAG, "Printer %zu: no device ID", i);
+                continue;
+            }
+            
+            // Get printer progress and state
+            const char* state_str = NULL;
+            int progress = bambu_get_printer_progress(i, &state_str);
+            
+            if (progress < 0) {
+                // Failed to get progress (no cache file), skip this printer
+                ESP_LOGI(TAG, "Printer %zu (%s): no cache data available", i, device_id);
+                continue;
+            }
+            
+            // Determine if printer is idle
+            const char* state = state_str ? state_str : "IDLE";
+            bool is_idle = (strcasecmp(state, "IDLE") == 0 || 
+                           strcasecmp(state, "idle") == 0 ||
+                           state[0] == '\0');
+            
+            ESP_LOGI(TAG, "Printer %zu (%s): state=%s, progress=%d%%, idle=%d", 
+                     i, device_id, state, progress, is_idle);
+            
+            if (!is_idle || progress > 0) {
+                // Printer is busy OR has progress - capture snapshot
+                ESP_LOGI(TAG, "Capturing snapshot for printer %zu (%s) (state=%s, progress=%d%%)", 
+                         i, device_id, state, progress);
+                esp_err_t ret = bambu_capture_snapshot(i, NULL);  // NULL = use default path
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, "Snapshot captured successfully for printer %zu", i);
+                } else {
+                    ESP_LOGW(TAG, "Snapshot capture failed for printer %zu: %s", 
+                             i, esp_err_to_name(ret));
+                }
+            } else if (is_idle && progress == 0) {
+                // Printer is truly idle (idle state + 0% progress) - delete snapshot
+                ESP_LOGI(TAG, "Printer %zu is idle, clearing snapshot", i);
+                bambu_delete_snapshot(i);
+            }
+            // Note: IDLE + 100% means just finished, keep the snapshot
+            
+            // Small delay between printers to avoid overwhelming network
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        
+        // Wait 60 seconds before next capture cycle
+        vTaskDelay(pdMS_TO_TICKS(60000));
+    }
+    
+    vTaskDelete(NULL);
+}
+
 extern "C" void app_main(void)
 {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);      // enable DEBUG logs for this App
@@ -584,6 +678,18 @@ extern "C" void app_main(void)
         0  // Core 0
     );
     ESP_LOGI(TAG, "Storage health monitor started (60s interval)");
+    
+    // Start Snapshot Capture task for periodic camera captures
+    xTaskCreatePinnedToCore(
+        snapshot_capture_task,
+        "snapshot_capture",
+        1024 * 4,  // Need stack for HTTP client
+        NULL,
+        1,  // Same priority as storage health
+        NULL,
+        0  // Core 0
+    );
+    ESP_LOGI(TAG, "Snapshot capture task started (60s interval)");
 }
 
 static void timer_datetime_callback(lv_timer_t * timer)
@@ -674,16 +780,39 @@ static void timer_printer_callback(lv_timer_t * timer)
             char filepath[384];  // Larger buffer for full path
             snprintf(filepath, sizeof(filepath), "%s/%s", printer_path, entry->d_name);
             
-            // Read file contents
-            std::ifstream printer_file(filepath);
-            if (!printer_file.is_open()) continue;
+            // Read file contents using C-style I/O (avoids C++ exception on SD card errors)
+            FILE* printer_file = fopen(filepath, "r");
+            if (!printer_file) continue;
             
-            std::string json_str((std::istreambuf_iterator<char>(printer_file)),
-                                 std::istreambuf_iterator<char>());
-            printer_file.close();
+            // Get file size
+            fseek(printer_file, 0, SEEK_END);
+            long fsize = ftell(printer_file);
+            fseek(printer_file, 0, SEEK_SET);
+            
+            if (fsize <= 0 || fsize > 16384) {
+                fclose(printer_file);
+                continue;
+            }
+            
+            // Read file content
+            char* json_buf = (char*)malloc(fsize + 1);
+            if (!json_buf) {
+                fclose(printer_file);
+                continue;
+            }
+            
+            size_t read_size = fread(json_buf, 1, fsize, printer_file);
+            fclose(printer_file);
+            
+            if (read_size == 0) {
+                free(json_buf);
+                continue;
+            }
+            json_buf[read_size] = '\0';
             
             // Parse JSON
-            cJSON* json = cJSON_Parse(json_str.c_str());
+            cJSON* json = cJSON_Parse(json_buf);
+            free(json_buf);
             if (!json) continue;
             
             // Check timestamp

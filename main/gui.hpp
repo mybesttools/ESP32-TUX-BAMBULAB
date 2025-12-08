@@ -246,12 +246,6 @@ static void create_page_home(lv_obj_t *parent);
 static void create_page_settings(lv_obj_t *parent);
 static void create_page_updates(lv_obj_t *parent);
 static void create_page_remote(lv_obj_t *parent);
-static void create_page_bambu(lv_obj_t *parent);
-
-// Forward declarations for Bambu callbacks
-static void bambu_status_cb(void * s, lv_msg_t * m);
-static void bambu_progress_cb(void * s, lv_msg_t * m);
-static void bambu_temps_cb(void * s, lv_msg_t * m);
 
 // Home page islands
 static void tux_panel_clock_weather(lv_obj_t *parent);
@@ -1069,307 +1063,6 @@ static void create_page_updates(lv_obj_t *parent)
     /* OTA UPDATES PAGE PANELS */
     tux_panel_ota(parent);
     tux_panel_devinfo(parent);    
-}
-
-static void create_page_bambu(lv_obj_t *parent)
-{
-    /* BAMBU MONITOR PAGE - Rich status display with icons */
-    
-    // Main panel
-    lv_obj_t *panel = tux_panel_create(parent, "PRINTER STATUS", LV_SIZE_CONTENT);
-    lv_obj_add_style(panel, &style_ui_island, 0);
-    
-    lv_obj_t *cont = tux_panel_get_content(panel);
-    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_gap(cont, 8, 0);
-    
-    // === STATUS ROW: Icon + State ===
-    lv_obj_t *row_status = lv_obj_create(cont);
-    lv_obj_set_size(row_status, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row_status, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row_status, 0, 0);
-    lv_obj_set_style_pad_all(row_status, 0, 0);
-    lv_obj_set_flex_flow(row_status, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row_status, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    // Status icon (large)
-    lv_obj_t *lbl_status_icon = lv_label_create(row_status);
-    lv_obj_set_style_text_font(lbl_status_icon, &font_fa_printer_42, 0);
-    lv_obj_set_style_text_color(lbl_status_icon, lv_color_hex(COLOR_PRINTER_IDLE), 0);
-    lv_label_set_text(lbl_status_icon, FA_PRINTER_STOP);
-    lv_obj_set_style_pad_right(lbl_status_icon, 12, 0);
-    
-    // Status text column
-    lv_obj_t *col_status = lv_obj_create(row_status);
-    lv_obj_set_size(col_status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(col_status, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(col_status, 0, 0);
-    lv_obj_set_style_pad_all(col_status, 0, 0);
-    lv_obj_set_flex_flow(col_status, LV_FLEX_FLOW_COLUMN);
-    
-    lv_obj_t *lbl_status = lv_label_create(col_status);
-    lv_obj_set_style_text_font(lbl_status, &font_montserrat_int_24, 0);
-    lv_label_set_text(lbl_status, "Offline");
-    
-    lv_obj_t *lbl_file = lv_label_create(col_status);
-    lv_obj_set_style_text_color(lbl_file, lv_palette_main(LV_PALETTE_GREY), 0);
-    lv_label_set_text(lbl_file, "No active job");
-    lv_label_set_long_mode(lbl_file, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(lbl_file, 250);
-    
-    // === PROGRESS ROW ===
-    lv_obj_t *row_progress = lv_obj_create(cont);
-    lv_obj_set_size(row_progress, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row_progress, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row_progress, 0, 0);
-    lv_obj_set_style_pad_all(row_progress, 0, 0);
-    lv_obj_set_flex_flow(row_progress, LV_FLEX_FLOW_COLUMN);
-    
-    // Progress bar
-    lv_obj_t *bar_progress = lv_bar_create(row_progress);
-    lv_obj_set_size(bar_progress, LV_PCT(100), 16);
-    lv_bar_set_range(bar_progress, 0, 100);
-    lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar_progress, lv_palette_darken(LV_PALETTE_GREY, 3), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar_progress, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
-    
-    // Progress info row (percentage + time + layers)
-    lv_obj_t *row_info = lv_obj_create(row_progress);
-    lv_obj_set_size(row_info, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row_info, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row_info, 0, 0);
-    lv_obj_set_style_pad_all(row_info, 4, 0);
-    lv_obj_set_flex_flow(row_info, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row_info, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    lv_obj_t *lbl_percent = lv_label_create(row_info);
-    lv_label_set_text(lbl_percent, "0%");
-    lv_obj_set_style_text_font(lbl_percent, &font_montserrat_int_16, 0);
-    
-    // Time remaining with icon
-    lv_obj_t *time_container = lv_obj_create(row_info);
-    lv_obj_set_size(time_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(time_container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(time_container, 0, 0);
-    lv_obj_set_style_pad_all(time_container, 0, 0);
-    lv_obj_set_flex_flow(time_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(time_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    lv_obj_t *lbl_time_icon = lv_label_create(time_container);
-    lv_obj_set_style_text_font(lbl_time_icon, &font_fa_printer_42, 0);
-    lv_obj_set_style_text_color(lbl_time_icon, lv_palette_main(LV_PALETTE_BLUE), 0);
-    lv_label_set_text(lbl_time_icon, FA_PRINTER_CLOCK);
-    lv_obj_set_style_transform_zoom(lbl_time_icon, 128, 0);  // Scale down to ~50%
-    
-    lv_obj_t *lbl_time = lv_label_create(time_container);
-    lv_label_set_text(lbl_time, "--:--");
-    
-    lv_obj_t *lbl_layers = lv_label_create(row_info);
-    lv_label_set_text(lbl_layers, "L: --/--");
-    
-    // === TEMPERATURE ROW ===
-    lv_obj_t *row_temps = lv_obj_create(cont);
-    lv_obj_set_size(row_temps, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(row_temps, lv_palette_darken(LV_PALETTE_GREY, 4), 0);
-    lv_obj_set_style_bg_opa(row_temps, LV_OPA_50, 0);
-    lv_obj_set_style_border_width(row_temps, 0, 0);
-    lv_obj_set_style_radius(row_temps, 8, 0);
-    lv_obj_set_style_pad_all(row_temps, 8, 0);
-    lv_obj_set_flex_flow(row_temps, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row_temps, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    // Nozzle temp
-    lv_obj_t *nozzle_cont = lv_obj_create(row_temps);
-    lv_obj_set_size(nozzle_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(nozzle_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(nozzle_cont, 0, 0);
-    lv_obj_set_style_pad_all(nozzle_cont, 0, 0);
-    lv_obj_set_flex_flow(nozzle_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(nozzle_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    lv_obj_t *lbl_nozzle_icon = lv_label_create(nozzle_cont);
-    lv_obj_set_style_text_font(lbl_nozzle_icon, &font_fa_printer_42, 0);
-    lv_obj_set_style_text_color(lbl_nozzle_icon, lv_color_hex(COLOR_PRINTER_HEATING), 0);
-    lv_label_set_text(lbl_nozzle_icon, FA_PRINTER_FIRE);
-    lv_obj_set_style_transform_zoom(lbl_nozzle_icon, 154, 0);  // Scale down to ~60%
-    lv_obj_set_style_pad_right(lbl_nozzle_icon, 4, 0);
-    
-    lv_obj_t *lbl_nozzle = lv_label_create(nozzle_cont);
-    lv_obj_set_style_text_font(lbl_nozzle, &font_montserrat_int_16, 0);
-    lv_label_set_text(lbl_nozzle, "N: --°C");
-    
-    // Bed temp
-    lv_obj_t *bed_cont = lv_obj_create(row_temps);
-    lv_obj_set_size(bed_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(bed_cont, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(bed_cont, 0, 0);
-    lv_obj_set_style_pad_all(bed_cont, 0, 0);
-    lv_obj_set_flex_flow(bed_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bed_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    lv_obj_t *lbl_bed_icon = lv_label_create(bed_cont);
-    lv_obj_set_style_text_font(lbl_bed_icon, &font_fa_printer_42, 0);
-    lv_obj_set_style_text_color(lbl_bed_icon, lv_color_hex(COLOR_PRINTER_HEATING), 0);
-    lv_label_set_text(lbl_bed_icon, FA_PRINTER_SUN);
-    lv_obj_set_style_transform_zoom(lbl_bed_icon, 154, 0);  // Scale down to ~60%
-    lv_obj_set_style_pad_right(lbl_bed_icon, 4, 0);
-    
-    lv_obj_t *lbl_bed = lv_label_create(bed_cont);
-    lv_obj_set_style_text_font(lbl_bed, &font_montserrat_int_16, 0);
-    lv_label_set_text(lbl_bed, "B: --°C");
-    
-    // === SNAPSHOT IMAGE ===
-    lv_obj_t *img_snapshot = lv_img_create(cont);
-    lv_obj_set_size(img_snapshot, 120, 90);  // 4:3 aspect ratio
-    lv_obj_align(img_snapshot, LV_ALIGN_TOP_RIGHT, -8, -8);  // Position in top right
-    lv_obj_set_style_bg_color(img_snapshot, lv_color_hex(0x202020), 0);
-    lv_obj_set_style_bg_opa(img_snapshot, LV_OPA_100, 0);
-    lv_obj_set_style_radius(img_snapshot, 4, 0);
-    lv_obj_set_style_border_width(img_snapshot, 1, 0);
-    lv_obj_set_style_border_color(img_snapshot, lv_color_hex(0x404040), 0);
-    // Will be updated when snapshot is available
-    
-    // === BUTTON ROW ===
-    lv_obj_t *row_buttons = lv_obj_create(cont);
-    lv_obj_set_size(row_buttons, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(row_buttons, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row_buttons, 0, 0);
-    lv_obj_set_style_pad_all(row_buttons, 0, 0);
-    lv_obj_set_style_pad_top(row_buttons, 8, 0);
-    lv_obj_set_flex_flow(row_buttons, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row_buttons, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    
-    // Refresh button
-    lv_obj_t *btn_query = lv_btn_create(row_buttons);
-    lv_obj_set_size(btn_query, 140, 40);
-    lv_obj_set_style_bg_color(btn_query, lv_palette_main(LV_PALETTE_BLUE), 0);
-    lv_obj_t *lbl_query = lv_label_create(btn_query);
-    lv_label_set_text(lbl_query, "Refresh");
-    lv_obj_center(lbl_query);
-    lv_obj_add_event_cb(btn_query, [](lv_event_t *e) {
-        ESP_LOGI("GUI", "Refresh button - sending MQTT query");
-        esp_err_t ret = bambu_send_query();
-        if (ret == ESP_OK) {
-            ESP_LOGI("GUI", "Query sent successfully");
-        } else {
-            ESP_LOGE("GUI", "Failed to send query");
-        }
-    }, LV_EVENT_CLICKED, NULL);
-    
-    // Store widget references for callbacks using user_data on the panel
-    // We'll use a simple struct to hold all the label pointers
-    typedef struct {
-        lv_obj_t *status_icon;
-        lv_obj_t *status;
-        lv_obj_t *file;
-        lv_obj_t *bar;
-        lv_obj_t *percent;
-        lv_obj_t *time;
-        lv_obj_t *layers;
-        lv_obj_t *nozzle;
-        lv_obj_t *bed;
-        lv_obj_t *snapshot;  // Camera snapshot image
-        int printer_index;   // Which printer this panel represents
-    } bambu_widgets_t;
-    
-    static bambu_widgets_t widgets;
-    widgets.status_icon = lbl_status_icon;
-    widgets.status = lbl_status;
-    widgets.file = lbl_file;
-    widgets.bar = bar_progress;
-    widgets.percent = lbl_percent;
-    widgets.time = lbl_time;
-    widgets.layers = lbl_layers;
-    widgets.nozzle = lbl_nozzle;
-    widgets.bed = lbl_bed;
-    widgets.snapshot = img_snapshot;
-    widgets.printer_index = 0;  // TODO: Support multiple printers when carousel integration is added
-    
-    // Subscribe to full update message
-    lv_msg_subscribe(MSG_BAMBU_FULL_UPDATE, [](void *s, lv_msg_t *m) {
-        bambu_widgets_t *w = (bambu_widgets_t *)s;
-        const bambu_printer_data_t *data = (const bambu_printer_data_t *)lv_msg_get_payload(m);
-        if (!data || !w) return;
-        
-        // Update status icon and color based on state
-        const char *icon = FA_PRINTER_STOP;
-        uint32_t color = COLOR_PRINTER_IDLE;
-        
-        if (strcmp(data->state, "RUNNING") == 0) {
-            icon = FA_PRINTER_PLAY;
-            color = COLOR_PRINTER_PRINTING;
-        } else if (strcmp(data->state, "PAUSE") == 0) {
-            icon = FA_PRINTER_PAUSE;
-            color = COLOR_PRINTER_PAUSED;
-        } else if (strcmp(data->state, "FINISH") == 0) {
-            icon = FA_PRINTER_CHECK;
-            color = COLOR_PRINTER_COMPLETE;
-        } else if (strcmp(data->state, "FAILED") == 0 || strcmp(data->state, "ERROR") == 0) {
-            icon = FA_PRINTER_WARNING;
-            color = COLOR_PRINTER_ERROR;
-        }
-        
-        if (lv_obj_is_valid(w->status_icon)) {
-            lv_label_set_text(w->status_icon, icon);
-            lv_obj_set_style_text_color(w->status_icon, lv_color_hex(color), 0);
-        }
-        if (lv_obj_is_valid(w->status)) {
-            lv_label_set_text(w->status, data->state);
-        }
-        if (lv_obj_is_valid(w->file)) {
-            lv_label_set_text(w->file, data->subtask_name[0] ? data->subtask_name : "No active job");
-        }
-        if (lv_obj_is_valid(w->bar)) {
-            lv_bar_set_value(w->bar, data->progress, LV_ANIM_ON);
-        }
-        if (lv_obj_is_valid(w->percent)) {
-            lv_label_set_text_fmt(w->percent, "%d%%", data->progress);
-        }
-        if (lv_obj_is_valid(w->time)) {
-            if (data->remaining_min > 0) {
-                int hours = data->remaining_min / 60;
-                int mins = data->remaining_min % 60;
-                lv_label_set_text_fmt(w->time, "%d:%02d", hours, mins);
-            } else {
-                lv_label_set_text(w->time, "--:--");
-            }
-        }
-        if (lv_obj_is_valid(w->layers)) {
-            if (data->total_layers > 0) {
-                lv_label_set_text_fmt(w->layers, "L: %d/%d", data->current_layer, data->total_layers);
-            } else {
-                lv_label_set_text(w->layers, "L: --/--");
-            }
-        }
-        if (lv_obj_is_valid(w->nozzle)) {
-            lv_label_set_text_fmt(w->nozzle, "N: %.0f°C", data->nozzle_temp);
-        }
-        if (lv_obj_is_valid(w->bed)) {
-            lv_label_set_text_fmt(w->bed, "B: %.0f°C", data->bed_temp);
-        }
-        
-        // Update snapshot image if available
-        if (lv_obj_is_valid(w->snapshot)) {
-            const char* snapshot_path = bambu_get_last_snapshot_path(w->printer_index);
-            if (snapshot_path && snapshot_path[0] != '\0') {
-                // LVGL filesystem mapping: S: = /sdcard, F: = /spiffs
-                char lvgl_path[280];
-                if (strncmp(snapshot_path, "/sdcard/", 8) == 0) {
-                    snprintf(lvgl_path, sizeof(lvgl_path), "S:/%s", snapshot_path + 8);
-                } else if (strncmp(snapshot_path, "/spiffs/", 8) == 0) {
-                    snprintf(lvgl_path, sizeof(lvgl_path), "F:/%s", snapshot_path + 8);
-                } else {
-                    strncpy(lvgl_path, snapshot_path, sizeof(lvgl_path) - 1);
-                }
-                lv_img_set_src(w->snapshot, lvgl_path);
-            }
-        }
-    }, &widgets);
-    
-    // Legacy subscriptions for backward compatibility
-    lv_msg_subscribe(MSG_BAMBU_STATUS, bambu_status_cb, lbl_status);
-    lv_msg_subscribe(MSG_BAMBU_PROGRESS, bambu_progress_cb, lbl_percent);
-    lv_msg_subscribe(MSG_BAMBU_TEMPS, bambu_temps_cb, lbl_nozzle);
 }
 
 static void create_splash_screen()
@@ -2318,6 +2011,30 @@ static void poll_printer_files()
         slide.value3 = value3_buf;
         slide.value4 = value4_buf;
 
+        // Get snapshot path from BambuMonitor - find printer index by serial
+        slide.snapshot_path.clear();  // Reset first
+        for (int bm_idx = 0; bm_idx < BAMBU_MAX_PRINTERS; bm_idx++) {
+            if (!bambu_is_printer_active(bm_idx)) continue;
+            const char* device_id = bambu_get_device_id(bm_idx);
+            if (device_id && printer.serial == device_id) {
+                // Found matching printer in BambuMonitor
+                const char* snapshot = bambu_get_last_snapshot_path(bm_idx);
+                if (snapshot && snapshot[0] != '\0') {
+                    // Convert filesystem path to LVGL path format
+                    if (strncmp(snapshot, "/sdcard/", 8) == 0) {
+                        slide.snapshot_path = std::string("S:/") + (snapshot + 8);
+                    } else if (strncmp(snapshot, "/spiffs/", 8) == 0) {
+                        slide.snapshot_path = std::string("F:/") + (snapshot + 8);
+                    } else {
+                        slide.snapshot_path = snapshot;
+                    }
+                    ESP_LOGI(TAG, "Snapshot for %s: %s -> %s", printer.serial.c_str(), 
+                             snapshot, slide.snapshot_path.c_str());
+                }
+                break;
+            }
+        }
+
         // Update the actual UI labels
         carousel_widget->update_slide_labels(i);
 
@@ -2699,38 +2416,4 @@ static void set_weather_icon(string weatherIcon)
     // default
     lv_label_set_text(lbl_weathericon,FA_WEATHER_CLOUD_SHOWERS_HEAVY);
     lv_obj_set_style_text_color(lbl_weathericon,lv_palette_main(LV_PALETTE_BLUE_GREY),0); 
-}
-
-// Bambu Monitor event callbacks
-static void bambu_status_cb(void * s, lv_msg_t * m)
-{
-    lv_obj_t * lbl_status = (lv_obj_t *)s;
-    if (!lv_obj_is_valid(lbl_status)) return;
-    
-    const char * status = (const char *)lv_msg_get_payload(m);
-    if (status) {
-        lv_label_set_text_fmt(lbl_status, "Status: %s", status);
-    }
-}
-
-static void bambu_progress_cb(void * s, lv_msg_t * m)
-{
-    lv_obj_t * lbl_progress = (lv_obj_t *)s;
-    if (!lv_obj_is_valid(lbl_progress)) return;
-    
-    uint8_t * progress = (uint8_t *)lv_msg_get_payload(m);
-    if (progress) {
-        lv_label_set_text_fmt(lbl_progress, "Progress: %d%%", *progress);
-    }
-}
-
-static void bambu_temps_cb(void * s, lv_msg_t * m)
-{
-    lv_obj_t * lbl_temps = (lv_obj_t *)s;
-    if (!lv_obj_is_valid(lbl_temps)) return;
-    
-    const char * temps = (const char *)lv_msg_get_payload(m);
-    if (temps) {
-        lv_label_set_text_fmt(lbl_temps, "%s", temps);
-    }
 }
