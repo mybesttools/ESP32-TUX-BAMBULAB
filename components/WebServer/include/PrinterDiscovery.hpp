@@ -109,6 +109,13 @@ private:
     std::string extract_model_from_hostname(const std::string &hostname);
     
     /**
+     * Discover printers via mDNS query
+     * @param timeout_ms: Query timeout in milliseconds
+     * @return Vector of discovered printers
+     */
+    std::vector<PrinterInfo> discover_mdns(int timeout_ms = 3000);
+    
+    /**
      * Parse CIDR subnet and generate IP addresses to scan
      * @param subnet: CIDR notation (e.g., "192.168.1.0/24")
      * @return Vector of IP addresses to scan

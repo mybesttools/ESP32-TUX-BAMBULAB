@@ -6,7 +6,17 @@
 
 set -e
 
-PORT=${1:-/dev/cu.usbmodem21201}
+# Auto-detect USB port if not provided
+if [ -n "$1" ]; then
+    PORT="$1"
+elif [ -e /dev/cu.usbmodem21201 ]; then
+    PORT="/dev/cu.usbmodem21201"
+elif [ -e /dev/cu.usbmodem1101 ]; then
+    PORT="/dev/cu.usbmodem1101"
+else
+    echo "Error: No USB device found. Connect your ESP32 or specify port manually."
+    exit 1
+fi
 BAUD=${2:-460800}
 
 echo "╔════════════════════════════════════════╗"

@@ -48,7 +48,8 @@ enum {
     TUX_EVENT_OTA_ABORTED,                   // OTA Aborted
 
     TUX_EVENT_WEATHER_UPDATED,               // Weather updated
-    TUX_EVENT_THEME_CHANGED                  // raised when the theme changes
+    TUX_EVENT_THEME_CHANGED,                 // raised when the theme changes
+    TUX_EVENT_CONFIG_CHANGED                 // Config changed (locations/printers added)
 };
 
 #ifdef __cplusplus

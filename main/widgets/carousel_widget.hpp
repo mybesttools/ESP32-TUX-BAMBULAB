@@ -10,9 +10,28 @@
 #include <vector>
 #include <string>
 #include "esp_log.h"
+#include "i18n/lang.hpp"  // Internationalization support
 
-// Weather icon font declaration
+// Font declarations
 LV_FONT_DECLARE(font_fa_weather_42)
+LV_FONT_DECLARE(font_fa_printer_42)
+LV_FONT_DECLARE(font_fa_printer_24)
+
+// Printer icon definitions (UTF-8 encoded FontAwesome)
+#define ICON_PRINTER_PLAY         "\xEF\x81\x8B"      // f04b - Play (Printing)
+#define ICON_PRINTER_PAUSE        "\xEF\x81\x8C"      // f04c - Pause (Paused)
+#define ICON_PRINTER_STOP         "\xEF\x81\x8D"      // f04d - Stop (Idle/Stopped)
+#define ICON_PRINTER_CHECK        "\xEF\x80\x8C"      // f00c - Check (Complete/Ready)
+#define ICON_PRINTER_WARNING      "\xEF\x81\xB1"      // f071 - Warning Triangle (Error)
+#define ICON_PRINTER_THERMOMETER  "\xEF\x8B\x89"      // f2c9 - Thermometer Half
+#define ICON_PRINTER_FIRE         "\xEF\x81\xAD"      // f06d - Fire (Heating/Bed)
+
+// Slide types
+enum carousel_slide_type_t {
+    SLIDE_TYPE_WEATHER = 0,
+    SLIDE_TYPE_PRINTER = 1,
+    SLIDE_TYPE_OTHER = 2
+};
 
 // Slide data structure
 struct carousel_slide_t {
@@ -24,6 +43,9 @@ struct carousel_slide_t {
     std::string value4;          // Extra info line
     lv_color_t bg_color;         // Background color
     uint32_t icon_code;          // Font icon code (if used)
+    carousel_slide_type_t type;  // Slide type for icon font selection
+    
+    carousel_slide_t() : bg_color(lv_color_hex(0x2a2a2a)), icon_code(0), type(SLIDE_TYPE_OTHER) {}
 };
 
 // Carousel callback types
@@ -100,12 +122,17 @@ void CarouselWidget::create_carousel(lv_obj_t *parent, int width, int height)
     lv_obj_set_size(scroll_container, width, height - 50);  // Use passed width, not queried size
     lv_obj_set_pos(scroll_container, 0, 0);
     lv_obj_set_scroll_dir(scroll_container, LV_DIR_HOR);
-    lv_obj_set_style_bg_color(scroll_container, lv_color_hex(0x2e2e2e), 0);  // Slightly lighter for debugging
+    lv_obj_set_style_bg_color(scroll_container, lv_color_hex(0x1e1e1e), 0);  // Match container bg
     lv_obj_set_style_border_width(scroll_container, 0, 0);
+    lv_obj_set_style_radius(scroll_container, 0, 0);  // No rounded corners
     lv_obj_set_style_pad_all(scroll_container, 0, 0);
+    lv_obj_set_style_pad_gap(scroll_container, 0, 0);  // No gap between slides
+    lv_obj_set_style_pad_row(scroll_container, 0, 0);  // No row gap
+    lv_obj_set_style_pad_column(scroll_container, 0, 0);  // No column gap
     lv_obj_set_scrollbar_mode(scroll_container, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_scroll_snap_x(scroll_container, LV_SCROLL_SNAP_CENTER);
+    lv_obj_set_scroll_snap_x(scroll_container, LV_SCROLL_SNAP_START);  // Snap to start for clean alignment
     lv_obj_set_style_bg_opa(scroll_container, LV_OPA_COVER, 0);  // Ensure scroll container is visible
+    lv_obj_clear_flag(scroll_container, LV_OBJ_FLAG_SCROLL_ELASTIC);  // Disable elastic scroll
     
     // Save dimensions for later use
     this->width = width;
@@ -153,28 +180,28 @@ void CarouselWidget::add_slide(const carousel_slide_t &slide)
     // Title
     lv_obj_t *title = lv_label_create(slide_panel);
     lv_label_set_text(title, slide.title.c_str());
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_pos(title, 20, 20);
     
     // Subtitle
     lv_obj_t *subtitle = lv_label_create(slide_panel);
     lv_label_set_text(subtitle, slide.subtitle.c_str());
-    lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
     lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
     lv_obj_set_pos(subtitle, 20, 50);
     
     // Main value (temperature, progress, etc.)
     lv_obj_t *value1 = lv_label_create(slide_panel);
     lv_label_set_text(value1, slide.value1.c_str());
-    lv_obj_set_style_text_font(value1, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
     lv_obj_set_style_text_color(value1, lv_color_hex(0xffa500), 0);
     lv_obj_align(value1, LV_ALIGN_CENTER, 0, -30);
     
     // Secondary value (description)
     lv_obj_t *value2 = lv_label_create(slide_panel);
     lv_label_set_text(value2, slide.value2.c_str());
-    lv_obj_set_style_text_font(value2, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
     lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
     lv_obj_align(value2, LV_ALIGN_CENTER, 0, 40);
     
@@ -198,67 +225,140 @@ void CarouselWidget::update_slides()
     // Recreate visual panels from slides data
     for (size_t i = 0; i < slides.size(); i++) {
         const auto &slide = slides[i];
-        ESP_LOGW("CarouselWidget", "Creating panel %d for: %s", i, slide.title.c_str());
+        ESP_LOGW("CarouselWidget", "Creating panel %d for: %s (type=%d)", i, slide.title.c_str(), slide.type);
         
-        // Create slide panel - use saved dimensions
+        // Create slide panel - use saved dimensions, identical for all slide types
         lv_obj_t *slide_panel = lv_obj_create(scroll_container);
         lv_obj_set_size(slide_panel, width, height - 50);  // Use saved dimensions
         lv_obj_set_style_bg_color(slide_panel, slide.bg_color, 0);
         lv_obj_set_style_border_width(slide_panel, 0, 0);
-        lv_obj_set_style_pad_all(slide_panel, 20, 0);
+        lv_obj_set_style_radius(slide_panel, 0, 0);  // No rounded corners
+        lv_obj_set_style_pad_all(slide_panel, 0, 0);  // No padding - position content explicitly
         lv_obj_set_flex_grow(slide_panel, 0);  // Don't grow, keep exact size
+        lv_obj_clear_flag(slide_panel, LV_OBJ_FLAG_SCROLLABLE);  // Slide panels don't scroll
         
-        // Title (Location)
-        lv_obj_t *title = lv_label_create(slide_panel);
-        lv_label_set_text(title, slide.title.c_str());
-        lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(title, lv_color_white(), 0);
-        lv_obj_set_pos(title, 10, 15);
-        
-        // Subtitle (Time, Date, Location details)
-        lv_obj_t *subtitle = lv_label_create(slide_panel);
-        lv_label_set_text(subtitle, slide.subtitle.c_str());
-        lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
-        lv_obj_set_pos(subtitle, 10, 45);
-        
-        // Main value (Current temperature)
-        lv_obj_t *value1 = lv_label_create(slide_panel);
-        lv_label_set_text(value1, slide.value1.c_str());
-        lv_obj_set_style_text_font(value1, &lv_font_montserrat_32, 0);
-        lv_obj_set_style_text_color(value1, lv_color_hex(0xffa500), 0);
-        lv_obj_set_pos(value1, 10, 70);
-        
-        // Secondary value (Weather description)
-        lv_obj_t *value2 = lv_label_create(slide_panel);
-        lv_label_set_text(value2, slide.value2.c_str());
-        lv_obj_set_style_text_font(value2, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
-        lv_obj_set_pos(value2, 10, 115);
-        
-        // Value 3 (Temp range, humidity) - always created for consistent child index
-        lv_obj_t *value3 = lv_label_create(slide_panel);
-        lv_label_set_text(value3, slide.value3.empty() ? "" : slide.value3.c_str());
-        lv_obj_set_style_text_font(value3, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(value3, lv_color_hex(0x88ccff), 0);
-        lv_obj_set_pos(value3, 10, 140);
-        
-        // Value 4 (Wind, pressure) - always created for consistent child index
-        lv_obj_t *value4 = lv_label_create(slide_panel);
-        lv_label_set_text(value4, slide.value4.empty() ? "" : slide.value4.c_str());
-        lv_obj_set_style_text_font(value4, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(value4, lv_color_hex(0x88ccff), 0);
-        lv_obj_set_pos(value4, 10, 165);
-        
-        // Weather icon (child 6) - positioned on the right side
-        lv_obj_t *icon = lv_label_create(slide_panel);
-        lv_label_set_text(icon, LV_SYMBOL_IMAGE);  // Placeholder until weather updates
-        lv_obj_set_style_text_font(icon, &font_fa_weather_42, 0);
-        lv_obj_set_style_text_color(icon, lv_color_make(241, 235, 156), 0);  // Warm yellow
-        lv_obj_set_pos(icon, width - 100, 60);  // Position on right side
+        if (slide.type == SLIDE_TYPE_PRINTER) {
+            // ============ PRINTER SLIDE LAYOUT ============
+            // Child order: 0=title, 1=subtitle, 2=value1(progress), 3=nozzle_icon, 4=value2(nozzle temp),
+            //              5=bed_icon, 6=value3(bed+layer), 7=value4(file), 8=status_icon(top-right)
+            
+            // Child 0: Title (Printer name)
+            lv_obj_t *title = lv_label_create(slide_panel);
+            lv_label_set_text(title, slide.title.c_str());
+            lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
+            lv_obj_set_style_text_color(title, lv_color_white(), 0);
+            lv_obj_set_pos(title, 10, 5);
+            
+            // Child 1: Subtitle (State + time remaining)
+            lv_obj_t *subtitle = lv_label_create(slide_panel);
+            lv_label_set_text(subtitle, slide.subtitle.c_str());
+            lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
+            lv_obj_set_pos(subtitle, 10, 38);
+            
+            // Child 2: Progress (large)
+            lv_obj_t *value1 = lv_label_create(slide_panel);
+            lv_label_set_text(value1, slide.value1.c_str());
+            lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
+            lv_obj_set_style_text_color(value1, lv_color_hex(0x00cc00), 0);  // Green for progress
+            lv_obj_set_pos(value1, 10, 62);
+            
+            // Child 3: Nozzle icon (tint/droplet - represents melted filament)
+            lv_obj_t *nozzle_icon = lv_label_create(slide_panel);
+            lv_obj_set_style_text_font(nozzle_icon, &font_fa_printer_42, 0);
+            lv_obj_set_style_text_color(nozzle_icon, lv_color_hex(0xff6600), 0);  // Orange
+            lv_label_set_text(nozzle_icon, "\xEF\x81\x83");  // f043 tint (droplet)
+            lv_obj_set_pos(nozzle_icon, 10, 105);
+            
+            // Child 4: Nozzle temperature text (value2)
+            lv_obj_t *value2 = lv_label_create(slide_panel);
+            lv_label_set_text(value2, slide.value2.c_str());
+            lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
+            lv_obj_set_pos(value2, 55, 115);
+            
+            // Child 5: Bed icon (thermometer - represents heated bed)
+            lv_obj_t *bed_icon = lv_label_create(slide_panel);
+            lv_obj_set_style_text_font(bed_icon, &font_fa_printer_42, 0);
+            lv_obj_set_style_text_color(bed_icon, lv_color_hex(0xff3300), 0);  // Red-orange
+            lv_label_set_text(bed_icon, "\xEF\x8B\x89");  // f2c9 thermometer
+            lv_obj_set_pos(bed_icon, 200, 105);
+            
+            // Child 6: Bed temp + Layer progress (value3)
+            lv_obj_t *value3 = lv_label_create(slide_panel);
+            lv_label_set_text(value3, slide.value3.empty() ? "" : slide.value3.c_str());
+            lv_obj_set_style_text_font(value3, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value3, lv_color_hex(0x88ccff), 0);
+            lv_obj_set_pos(value3, 10, 155);
+            
+            // Child 7: File name (value4)
+            lv_obj_t *value4 = lv_label_create(slide_panel);
+            lv_label_set_text(value4, slide.value4.empty() ? "" : slide.value4.c_str());
+            lv_obj_set_style_text_font(value4, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value4, lv_color_hex(0x888888), 0);
+            lv_obj_set_pos(value4, 10, 180);
+            
+            // Child 8: Main status icon (right side, same position as weather icon)
+            lv_obj_t *status_icon = lv_label_create(slide_panel);
+            lv_obj_set_style_text_font(status_icon, &font_fa_printer_42, 0);
+            lv_obj_set_style_text_color(status_icon, lv_color_hex(0x888888), 0);  // Default gray
+            lv_label_set_text(status_icon, "\xEF\x80\x91");  // f011 power-off (idle)
+            lv_obj_set_pos(status_icon, width - 100, 60);  // Same position as weather icon
+            
+        } else {
+            // ============ WEATHER/DEFAULT SLIDE LAYOUT ============
+            // Title (Location)
+            lv_obj_t *title = lv_label_create(slide_panel);
+            lv_label_set_text(title, slide.title.c_str());
+            lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
+            lv_obj_set_style_text_color(title, lv_color_white(), 0);
+            lv_obj_set_pos(title, 10, 10);
+            
+            // Subtitle (Time, Date, Location details)
+            lv_obj_t *subtitle = lv_label_create(slide_panel);
+            lv_label_set_text(subtitle, slide.subtitle.c_str());
+            lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
+            lv_obj_set_pos(subtitle, 10, 45);
+            
+            // Main value (Current temperature)
+            lv_obj_t *value1 = lv_label_create(slide_panel);
+            lv_label_set_text(value1, slide.value1.c_str());
+            lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
+            lv_obj_set_style_text_color(value1, lv_color_hex(0xffa500), 0);
+            lv_obj_set_pos(value1, 10, 70);
+            
+            // Secondary value (Weather description)
+            lv_obj_t *value2 = lv_label_create(slide_panel);
+            lv_label_set_text(value2, slide.value2.c_str());
+            lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
+            lv_obj_set_pos(value2, 10, 115);
+            
+            // Value 3 (Temp range, humidity)
+            lv_obj_t *value3 = lv_label_create(slide_panel);
+            lv_label_set_text(value3, slide.value3.empty() ? "" : slide.value3.c_str());
+            lv_obj_set_style_text_font(value3, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value3, lv_color_hex(0x88ccff), 0);
+            lv_obj_set_pos(value3, 10, 145);
+            
+            // Value 4 (Wind, pressure)
+            lv_obj_t *value4 = lv_label_create(slide_panel);
+            lv_label_set_text(value4, slide.value4.empty() ? "" : slide.value4.c_str());
+            lv_obj_set_style_text_font(value4, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_color(value4, lv_color_hex(0x88ccff), 0);
+            lv_obj_set_pos(value4, 10, 175);
+            
+            // Weather icon (child 6) - positioned on the right side
+            lv_obj_t *icon = lv_label_create(slide_panel);
+            lv_label_set_text(icon, LV_SYMBOL_IMAGE);  // Placeholder until weather updates
+            lv_obj_set_style_text_font(icon, &font_fa_weather_42, 0);
+            lv_obj_set_style_text_color(icon, lv_color_make(241, 235, 156), 0);  // Warm yellow
+            lv_obj_set_pos(icon, width - 100, 60);  // Position on right side
+        }
         
         slide_panels.push_back(slide_panel);
-        slide_labels.push_back(title);
+        slide_labels.push_back(lv_obj_get_child(slide_panel, 0));  // title
     }
     
     current_slide = 0;
@@ -277,28 +377,101 @@ void CarouselWidget::update_slide_labels(int index)
     lv_obj_t *panel = slide_panels[index];
     if (!panel) return;
     
-    // Get all children of the panel
-    // Child 0: title, Child 1: subtitle, Child 2: value1, Child 3: value2
+    const auto &slide = slides[index];
     uint32_t child_count = lv_obj_get_child_cnt(panel);
     
-    if (child_count >= 1) {
-        lv_obj_t *title = lv_obj_get_child(panel, 0);
-        lv_label_set_text(title, slides[index].title.c_str());
-    }
-    
-    if (child_count >= 2) {
-        lv_obj_t *subtitle = lv_obj_get_child(panel, 1);
-        lv_label_set_text(subtitle, slides[index].subtitle.c_str());
-    }
-    
-    if (child_count >= 3) {
-        lv_obj_t *value1 = lv_obj_get_child(panel, 2);
-        lv_label_set_text(value1, slides[index].value1.c_str());
-    }
-    
-    if (child_count >= 4) {
-        lv_obj_t *value2 = lv_obj_get_child(panel, 3);
-        lv_label_set_text(value2, slides[index].value2.c_str());
+    if (slide.type == SLIDE_TYPE_PRINTER) {
+        // Printer layout child indices (9 children):
+        // 0=title, 1=subtitle, 2=value1(progress), 3=nozzle_icon, 4=value2(nozzle temp),
+        // 5=bed_icon, 6=value3(bed+layer), 7=value4(file), 8=status_icon(top-right)
+        
+        if (child_count >= 1) {
+            lv_obj_t *title = lv_obj_get_child(panel, 0);
+            lv_label_set_text(title, slide.title.c_str());
+        }
+        if (child_count >= 2) {
+            lv_obj_t *subtitle = lv_obj_get_child(panel, 1);
+            lv_label_set_text(subtitle, slide.subtitle.c_str());
+        }
+        if (child_count >= 3) {
+            lv_obj_t *value1 = lv_obj_get_child(panel, 2);
+            lv_label_set_text(value1, slide.value1.c_str());
+        }
+        // Child 3 is nozzle_icon - no text update needed
+        if (child_count >= 5) {
+            lv_obj_t *value2 = lv_obj_get_child(panel, 4);
+            lv_label_set_text(value2, slide.value2.c_str());
+        }
+        // Child 5 is bed_icon - no text update needed
+        if (child_count >= 7) {
+            lv_obj_t *value3 = lv_obj_get_child(panel, 6);
+            lv_label_set_text(value3, slide.value3.c_str());
+        }
+        if (child_count >= 8) {
+            lv_obj_t *value4 = lv_obj_get_child(panel, 7);
+            lv_label_set_text(value4, slide.value4.c_str());
+        }
+        // Child 8 is status_icon - update based on state in subtitle
+        if (child_count >= 9) {
+            lv_obj_t *status_icon = lv_obj_get_child(panel, 8);
+            // Set icon and color based on state in subtitle (check all language translations)
+            bool is_running = (slide.subtitle.find(TR(STR_RUNNING)) != std::string::npos ||
+                              slide.subtitle.find(TR(STR_PRINTING)) != std::string::npos ||
+                              slide.subtitle.find("RUNNING") != std::string::npos ||
+                              slide.subtitle.find("PRINTING") != std::string::npos);
+            bool is_paused = (slide.subtitle.find(TR(STR_PAUSED)) != std::string::npos ||
+                             slide.subtitle.find("PAUSE") != std::string::npos);
+            bool is_error = (slide.subtitle.find(TR(STR_ERROR)) != std::string::npos ||
+                            slide.subtitle.find(TR(STR_FAILED)) != std::string::npos ||
+                            slide.subtitle.find("ERROR") != std::string::npos ||
+                            slide.subtitle.find("FAILED") != std::string::npos);
+            bool is_finished = (slide.subtitle.find(TR(STR_FINISHED)) != std::string::npos ||
+                               slide.subtitle.find("FINISH") != std::string::npos);
+            
+            if (is_running) {
+                lv_label_set_text(status_icon, "\xEF\x80\x93");  // f013 cog (working)
+                lv_obj_set_style_text_color(status_icon, lv_color_hex(0x00cc00), 0);  // Green
+            } else if (is_paused) {
+                lv_label_set_text(status_icon, "\xEF\x81\x8C");  // f04c pause
+                lv_obj_set_style_text_color(status_icon, lv_color_hex(0xffaa00), 0);  // Amber
+            } else if (is_error) {
+                lv_label_set_text(status_icon, "\xEF\x81\xB1");  // f071 warning
+                lv_obj_set_style_text_color(status_icon, lv_color_hex(0xff3333), 0);  // Red
+            } else if (is_finished) {
+                lv_label_set_text(status_icon, "\xEF\x80\x8C");  // f00c check
+                lv_obj_set_style_text_color(status_icon, lv_color_hex(0x00aaff), 0);  // Blue
+            } else {
+                lv_label_set_text(status_icon, "\xEF\x80\x91");  // f011 power-off (idle)
+                lv_obj_set_style_text_color(status_icon, lv_color_hex(0x888888), 0);  // Gray
+            }
+        }
+    } else {
+        // Weather/default layout child indices (7 children):
+        // 0=title, 1=subtitle, 2=value1, 3=value2, 4=value3, 5=value4, 6=icon
+        if (child_count >= 1) {
+            lv_obj_t *title = lv_obj_get_child(panel, 0);
+            lv_label_set_text(title, slide.title.c_str());
+        }
+        if (child_count >= 2) {
+            lv_obj_t *subtitle = lv_obj_get_child(panel, 1);
+            lv_label_set_text(subtitle, slide.subtitle.c_str());
+        }
+        if (child_count >= 3) {
+            lv_obj_t *value1 = lv_obj_get_child(panel, 2);
+            lv_label_set_text(value1, slide.value1.c_str());
+        }
+        if (child_count >= 4) {
+            lv_obj_t *value2 = lv_obj_get_child(panel, 3);
+            lv_label_set_text(value2, slide.value2.c_str());
+        }
+        if (child_count >= 5) {
+            lv_obj_t *value3 = lv_obj_get_child(panel, 4);
+            lv_label_set_text(value3, slide.value3.c_str());
+        }
+        if (child_count >= 6) {
+            lv_obj_t *value4 = lv_obj_get_child(panel, 5);
+            lv_label_set_text(value4, slide.value4.c_str());
+        }
     }
 }
 

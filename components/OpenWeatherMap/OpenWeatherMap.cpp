@@ -330,6 +330,7 @@ esp_err_t OpenWeatherMap::request_json_over_http()
 
     // Get API key from runtime config
     string api_key = cfg ? cfg->WeatherAPIkey : "";
+    string lang = cfg ? cfg->Language : "en";
     
     if (api_key.empty()) {
         ESP_LOGW(TAG, "Weather API Key not set");
@@ -343,13 +344,14 @@ esp_err_t OpenWeatherMap::request_json_over_http()
     }
     
     // units = standard / metric / imperial
+    // lang = language code for weather descriptions (en, de, nl, pl, etc.)
     // https://openweathermap.org/weather-data
     #if defined(CONFIG_WEATHER_UNITS_METRIC)    
-            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=metric&APPID=" + api_key;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=metric&lang=" + lang + "&APPID=" + api_key;
     #elif defined(CONFIG_WEATHER_UNITS_IMPERIAL)
-            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=imperial&APPID=" + api_key;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&units=imperial&lang=" + lang + "&APPID=" + api_key;
     #else   // Standard => Kelvin?
-            queryString = WEB_API_PATH "?q=" + LocationQuery + "&APPID=" + api_key;
+            queryString = WEB_API_PATH "?q=" + LocationQuery + "&lang=" + lang + "&APPID=" + api_key;
     #endif
 
     ESP_LOGI(TAG, "HTTP request to get weather");

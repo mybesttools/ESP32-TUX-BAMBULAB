@@ -3,21 +3,22 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_netif.h"
+#include "mdns.h"
 
 static const char *TAG = "mdns_responder";
 static char g_hostname[64] = {0};
 static bool g_initialized = false;
 
 /**
- * @brief Initialize hostname responder
+ * @brief Initialize mDNS responder with hostname and HTTP service
  * 
- * This function sets the hostname which will be used by the device.
- * For mDNS .local resolution to work:
- * 1. Router must support DHCP hostname advertising, OR
- * 2. Client must have static hosts file entry, OR  
- * 3. Network must use a full mDNS responder (component unavailable in ESP-IDF v5.0)
+ * This uses the ESP-IDF mDNS component to properly advertise the device
+ * on the local network. After initialization, the device will respond to:
+ *   - <hostname>.local  (A record - hostname resolution)
+ *   - _http._tcp service queries (service discovery)
  * 
- * Recommended: Add to /etc/hosts on client: 10.13.13.188 esp32-tux.local
+ * @param hostname The hostname to advertise (without .local suffix)
+ * @return ESP_OK on success
  */
 esp_err_t mdns_responder_init(const char *hostname)
 {
@@ -34,30 +35,41 @@ esp_err_t mdns_responder_init(const char *hostname)
     strncpy(g_hostname, hostname, sizeof(g_hostname) - 1);
     g_hostname[sizeof(g_hostname) - 1] = '\0';
 
-    // Get the WiFi station netif
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (!netif) {
-        ESP_LOGE(TAG, "Failed to get WiFi STA netif");
-        return ESP_FAIL;
+    // Initialize mDNS service
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS init failed: %s", esp_err_to_name(err));
+        return err;
     }
 
-    // Set the hostname - some routers will advertise this via DHCP
-    esp_err_t ret = esp_netif_set_hostname(netif, hostname);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set hostname: %s", esp_err_to_name(ret));
-        return ret;
+    // Set hostname - this allows resolution of <hostname>.local
+    err = mdns_hostname_set(hostname);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS hostname set failed: %s", esp_err_to_name(err));
+        mdns_free();
+        return err;
+    }
+
+    // Set instance name (friendly name shown in service browsers)
+    err = mdns_instance_name_set("ESP32-TUX Display");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS instance name set failed: %s", esp_err_to_name(err));
+        // Non-fatal, continue
+    }
+
+    // Add HTTP service - allows discovery via service browsers
+    err = mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS HTTP service add failed: %s", esp_err_to_name(err));
+        // Non-fatal, hostname resolution should still work
     }
 
     g_initialized = true;
     
-    // Log helpful information
     ESP_LOGI(TAG, "================================================");
-    ESP_LOGI(TAG, "Hostname set to: %s", hostname);
-    ESP_LOGI(TAG, "For .local resolution (esp32-tux.local):");
-    ESP_LOGI(TAG, "  Option 1: Router DHCP hostname support");
-    ESP_LOGI(TAG, "  Option 2: Add to /etc/hosts on client:");
-    ESP_LOGI(TAG, "    echo '10.13.13.188 esp32-tux.local' >> /etc/hosts");
-    ESP_LOGI(TAG, "  Option 3: Router DNS/DHCP configuration");
+    ESP_LOGI(TAG, "mDNS responder initialized");
+    ESP_LOGI(TAG, "Hostname: %s.local", hostname);
+    ESP_LOGI(TAG, "HTTP service advertised on port 80");
     ESP_LOGI(TAG, "================================================");
     
     return ESP_OK;
@@ -69,8 +81,14 @@ esp_err_t mdns_responder_deinit(void)
         return ESP_OK;
     }
 
+    // Remove HTTP service
+    mdns_service_remove("_http", "_tcp");
+    
+    // Free mDNS resources
+    mdns_free();
+    
     memset(g_hostname, 0, sizeof(g_hostname));
     g_initialized = false;
-    ESP_LOGI(TAG, "Deinitialized");
+    ESP_LOGI(TAG, "mDNS responder deinitialized");
     return ESP_OK;
 }

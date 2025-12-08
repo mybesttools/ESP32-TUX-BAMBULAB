@@ -1,516 +1,725 @@
+/**
+ * @file BambuMonitor.cpp
+ * @brief Multi-printer Bambu Lab MQTT Monitor
+ * 
+ * Supports up to 6 simultaneous MQTT connections to Bambu Lab printers.
+ * Each printer has its own MQTT client, state, and cache file.
+ */
+
 #include "BambuMonitor.hpp"
-#include "esp_log.h"
 #include "mqtt_client.h"
-#include "cJSON.h"
+#include "esp_log.h"
 #include "esp_tls.h"
-#include "mbedtls/base64.h"
-#include "mbedtls/ssl.h"
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/x509_crt.h"
-#include "mbedtls/entropy.h"
-#include "mbedtls/ctr_drbg.h"
-#include "mbedtls/pem.h"
+#include "cJSON.h"
 #include <cstring>
-#include <stdlib.h>
-#include <fstream>
 #include <string>
 #include <sys/time.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 static const char* TAG = "BambuMonitor";
+
+// Storage paths - prefer SD card over SPIFFS
+#define SDCARD_PRINTER_PATH "/sdcard/printer"
+#define SPIFFS_PRINTER_PATH "/spiffs/printer"
+
+// SD card availability cache
+static int sdcard_available = -1;  // -1 = not checked, 0 = not available, 1 = available
+
+// Per-printer state structure
+typedef struct {
+    bool active;                        // Slot is in use
+    bool connected;                     // MQTT is connected
+    bambu_printer_state_t state;        // Current printer state
+    bambu_printer_config_t config;      // Printer configuration
+    esp_mqtt_client_handle_t mqtt_client;  // MQTT client handle
+    cJSON* last_status;                 // Last received status JSON
+    time_t last_update;                 // Last update timestamp
+} printer_slot_t;
+
+// Global state
+static printer_slot_t printers[BAMBU_MAX_PRINTERS] = {0};
+static esp_event_handler_t registered_handler = NULL;
+static bool monitor_initialized = false;
+
+// Embedded Bambu Lab root certificates
+extern const uint8_t bambu_cert_start[] asm("_binary_bambu_combined_cert_start");
+extern const uint8_t bambu_cert_end[] asm("_binary_bambu_combined_cert_end");
 
 // Define event base
 ESP_EVENT_DEFINE_BASE(BAMBU_EVENT_BASE);
 
-// Global state
-static bambu_printer_state_t current_state = BAMBU_STATE_OFFLINE;
-static cJSON* last_status = NULL;
-static esp_mqtt_client_handle_t mqtt_client = NULL;
-static esp_event_handler_t registered_handler = NULL;
-static bool mqtt_initialized = false;
-static char* cached_tls_certificate = NULL;  // Dynamically fetched and cached
-static bambu_printer_config_t saved_config = {0};  // Save config for later use
-
-// Embedded Bambu Lab root certificates (combined)
-// These are sourced from Home Assistant integration: https://github.com/greghesp/ha-bambulab
-// Contains all three Bambu Lab CA certificates: bambu.cert, bambu_p2s_250626.cert, bambu_h2c_251122.cert
-extern const uint8_t bambu_cert_start[] asm("_binary_bambu_combined_cert_start");
-extern const uint8_t bambu_cert_end[] asm("_binary_bambu_combined_cert_end");
+// Forward declarations
+static void mqtt_event_handler(void* handler_args, esp_event_base_t base, 
+                              int32_t event_id, void* event_data);
+static void process_printer_data(int index, const char* topic, const char* data, int data_len);
 
 /**
- * @brief MQTT event handler for Bambu printer communication
+ * @brief Check if SD card is available and create printer directory
+ * Result is cached after first check.
+ */
+static bool is_sdcard_available() {
+    // Return cached result if already checked
+    if (sdcard_available >= 0) {
+        return sdcard_available == 1;
+    }
+    
+    struct stat st;
+    
+    // Check if /sdcard is a valid mounted directory
+    if (stat("/sdcard", &st) != 0) {
+        ESP_LOGW(TAG, "SD card not mounted: /sdcard stat failed (errno=%d)", errno);
+        sdcard_available = 0;
+        return false;
+    }
+    
+    if (!S_ISDIR(st.st_mode)) {
+        ESP_LOGW(TAG, "SD card: /sdcard is not a directory");
+        sdcard_available = 0;
+        return false;
+    }
+    
+    // Try to actually write to the SD card
+    FILE* test = fopen("/sdcard/.bambu_test", "w");
+    if (!test) {
+        ESP_LOGW(TAG, "SD card not writable: fopen failed (errno=%d)", errno);
+        sdcard_available = 0;
+        return false;
+    }
+    fprintf(test, "test");
+    fclose(test);
+    remove("/sdcard/.bambu_test");
+    ESP_LOGI(TAG, "SD card is writable");
+    
+    // Create printer directory if needed
+    if (stat(SDCARD_PRINTER_PATH, &st) != 0) {
+        if (mkdir(SDCARD_PRINTER_PATH, 0755) == 0) {
+            ESP_LOGI(TAG, "Created printer directory: %s", SDCARD_PRINTER_PATH);
+        } else {
+            ESP_LOGW(TAG, "Failed to create %s (errno=%d), will use SPIFFS", SDCARD_PRINTER_PATH, errno);
+            sdcard_available = 0;
+            return false;
+        }
+    } else {
+        ESP_LOGI(TAG, "Printer directory exists: %s", SDCARD_PRINTER_PATH);
+    }
+    
+    sdcard_available = 1;
+    ESP_LOGI(TAG, "SD card available for printer cache");
+    return true;
+}
+
+/**
+ * @brief Reset SD card availability check (call after SD remount)
+ */
+void bambu_reset_sdcard_check(void) {
+    sdcard_available = -1;
+}
+
+/**
+ * @brief Get cache file path for a printer serial
+ */
+static std::string get_printer_cache_path(const char* serial) {
+    if (is_sdcard_available()) {
+        return std::string(SDCARD_PRINTER_PATH) + "/" + serial + ".json";
+    }
+    return std::string(SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
+}
+
+/**
+ * @brief Find printer index by MQTT client handle
+ */
+static int find_printer_by_client(esp_mqtt_client_handle_t client) {
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].mqtt_client == client) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief Find printer index by device ID (serial)
+ */
+static int find_printer_by_device_id(const char* device_id) {
+    if (!device_id) return -1;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].config.device_id &&
+            strcmp(printers[i].config.device_id, device_id) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @brief MQTT event handler for all printers
  */
 static void mqtt_event_handler(void* handler_args, esp_event_base_t base, 
                               int32_t event_id, void* event_data)
 {
     esp_mqtt_event_handle_t event = (esp_mqtt_event_handle_t)event_data;
+    int index = (int)(intptr_t)handler_args;  // Printer index passed as user data
+    
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        ESP_LOGW(TAG, "Event for invalid printer index: %d", index);
+        return;
+    }
+    
+    printer_slot_t* printer = &printers[index];
     
     switch (event->event_id) {
-        case MQTT_EVENT_BEFORE_CONNECT: {
-            ESP_LOGD(TAG, "MQTT Before Connect");
-            break;
-        }
-            
         case MQTT_EVENT_CONNECTED: {
-            ESP_LOGI(TAG, "MQTT Connected to Bambu printer");
-            // Subscribe to specific printer status topic (wildcards may not be supported)
-            char subscribe_topic[128];
-            snprintf(subscribe_topic, sizeof(subscribe_topic), "device/%s/report", saved_config.device_id);
-            int msg_id = esp_mqtt_client_subscribe(mqtt_client, subscribe_topic, 1);
-            ESP_LOGI(TAG, "Subscribed to %s (msg_id: %d)", subscribe_topic, msg_id);
-            current_state = BAMBU_STATE_IDLE;
+            ESP_LOGI(TAG, "[%d] MQTT connected to %s", index, printer->config.ip_address);
+            printer->connected = true;
+            printer->state = BAMBU_STATE_IDLE;
+            
+            // Subscribe to printer status topic
+            char topic[128];
+            snprintf(topic, sizeof(topic), "device/%s/report", printer->config.device_id);
+            int msg_id = esp_mqtt_client_subscribe(printer->mqtt_client, topic, 1);
+            ESP_LOGI(TAG, "[%d] Subscribed to %s (msg_id: %d)", index, topic, msg_id);
+            
+            // Notify handler
+            if (registered_handler) {
+                registered_handler(NULL, BAMBU_EVENT_BASE, BAMBU_PRINTER_CONNECTED, (void*)(intptr_t)index);
+            }
             break;
         }
-            
+        
         case MQTT_EVENT_DISCONNECTED: {
-            ESP_LOGW(TAG, "MQTT Disconnected from printer");
-            current_state = BAMBU_STATE_OFFLINE;
+            ESP_LOGW(TAG, "[%d] MQTT disconnected from %s", index, printer->config.ip_address);
+            printer->connected = false;
+            printer->state = BAMBU_STATE_OFFLINE;
+            
+            if (registered_handler) {
+                registered_handler(NULL, BAMBU_EVENT_BASE, BAMBU_PRINTER_DISCONNECTED, (void*)(intptr_t)index);
+            }
             break;
         }
-            
-        case MQTT_EVENT_SUBSCRIBED: {
-            ESP_LOGI(TAG, "MQTT Subscribed successfully (msg_id: %d)", event->msg_id);
-            break;
-        }
-            
-        case MQTT_EVENT_UNSUBSCRIBED: {
-            ESP_LOGI(TAG, "MQTT Unsubscribed (msg_id: %d)", event->msg_id);
-            break;
-        }
-            
-        case MQTT_EVENT_PUBLISHED: {
-            ESP_LOGI(TAG, "MQTT Message published successfully (msg_id: %d)", event->msg_id);
-            break;
-        }
-            
+        
         case MQTT_EVENT_DATA: {
-            ESP_LOGI(TAG, "MQTT_EVENT_DATA received:");
-            ESP_LOGI(TAG, "  Topic length: %d, Data length: %d", event->topic_len, event->data_len);
-            ESP_LOGI(TAG, "  Current data offset: %d, Total data length: %d", event->current_data_offset, event->total_data_len);
-            
-            // Extract topic and payload safely
-            char topic[128] = {0};
-            char serial[64] = {0};  // Declare serial here for wider scope
-            
-            if (event->topic_len > 0 && event->topic_len < sizeof(topic)) {
-                strncpy(topic, event->topic, event->topic_len);
-            }
-            
-            // Extract serial number from topic (format: device/SERIAL/report)
-            // This is how Home Assistant does it instead of HTTP queries
-            if (strncmp(topic, "device/", 7) == 0) {
-                const char* serial_start = topic + 7;
-                const char* serial_end = strchr(serial_start, '/');
-                if (serial_end) {
-                    size_t serial_len = serial_end - serial_start;
-                    if (serial_len > 0 && serial_len < sizeof(serial)) {
-                        strncpy(serial, serial_start, serial_len);
-                        ESP_LOGI(TAG, "Printer serial from MQTT topic: %s", serial);
-                        // TODO: Save serial to config if not already set
-                    }
+            if (event->topic_len > 0 && event->data_len > 0) {
+                char topic[128] = {0};
+                if (event->topic_len < sizeof(topic)) {
+                    strncpy(topic, event->topic, event->topic_len);
                 }
-            }
-            
-            // Log first 200 chars of data for debugging
-            if (event->data && event->data_len > 0) {
-                int log_len = event->data_len < 200 ? event->data_len : 200;
-                char log_buf[201] = {0};
-                strncpy(log_buf, event->data, log_len);
-                ESP_LOGI(TAG, "Data preview (first %d bytes): %s%s", log_len, log_buf, event->data_len > 200 ? "..." : "");
-            }
-            
-            ESP_LOGD(TAG, "MQTT Data received on topic: %s (len: %d, data_len: %d)", 
-                    topic, event->topic_len, event->data_len);
-            
-            // Parse JSON payload (limit to reasonable size)
-            // Bambu printers send large JSON payloads (~15KB typical)
-            if (event->data_len > 0 && event->data_len <= 20480) {
-                // Create null-terminated string for JSON parsing
-                char* json_str = (char*)malloc(event->data_len + 1);
-                if (json_str) {
-                    strncpy(json_str, event->data, event->data_len);
-                    json_str[event->data_len] = '\0';
-                    
-                    cJSON* json_data = cJSON_Parse(json_str);
-                    if (json_data) {
-                        if (last_status) {
-                            cJSON_Delete(last_status);
-                        }
-                        last_status = json_data;
-                        
-                        // Extract printer state
-                        cJSON* print_state = cJSON_GetObjectItem(json_data, "print_state");
-                        if (print_state && print_state->valuestring) {
-                            ESP_LOGD(TAG, "Printer state: %s", print_state->valuestring);
-                            
-                            if (strcmp(print_state->valuestring, "PRINTING") == 0) {
-                                current_state = BAMBU_STATE_PRINTING;
-                            } else if (strcmp(print_state->valuestring, "PAUSED") == 0) {
-                                current_state = BAMBU_STATE_PAUSED;
-                            } else if (strcmp(print_state->valuestring, "ERROR") == 0) {
-                                current_state = BAMBU_STATE_ERROR;
-                            } else {
-                                current_state = BAMBU_STATE_IDLE;
-                            }
-                        }
-                        
-                        // Extract temperatures if available
-                        cJSON* nozzle_temp = cJSON_GetObjectItem(json_data, "nozzle_temper");
-                        cJSON* bed_temp = cJSON_GetObjectItem(json_data, "bed_temper");
-                        if (nozzle_temp || bed_temp) {
-                            ESP_LOGD(TAG, "Temperatures - Nozzle: %d°C, Bed: %d°C",
-                                    nozzle_temp ? (int)nozzle_temp->valuedouble : 0,
-                                    bed_temp ? (int)bed_temp->valuedouble : 0);
-                        }
-                        
-                        // Write printer data to SPIFFS cache (like weather does)
-                        if (serial[0] != '\0') {  // Only write if we have serial number
-                            // Add timestamp to JSON for online/offline detection
-                            struct timeval tv_now;
-                            gettimeofday(&tv_now, NULL);
-                            cJSON_AddNumberToObject(json_data, "last_update", tv_now.tv_sec);
-                            
-                            // Convert JSON back to string for file writing
-                            char* json_output = cJSON_PrintUnformatted(json_data);
-                            if (json_output) {
-                                // Write to /spiffs/printer/<serial>.json
-                                std::string filename = std::string("/spiffs/printer/") + serial + ".json";
-                                std::ofstream printer_file(filename.c_str());
-                                if (printer_file.is_open()) {
-                                    printer_file << json_output;
-                                    printer_file.flush();
-                                    printer_file.close();
-                                    ESP_LOGI(TAG, "Wrote printer cache: %s", filename.c_str());
-                                } else {
-                                    ESP_LOGW(TAG, "Failed to write printer cache: %s", filename.c_str());
-                                }
-                                cJSON_free(json_output);
-                            }
-                        }
-                        
-                        // Notify registered handler if set
-                        if (registered_handler) {
-                            registered_handler(NULL, BAMBU_EVENT_BASE, 
-                                             BAMBU_STATUS_UPDATED, (void*)current_state);
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "Failed to parse JSON from printer");
-                    }
-                    
-                    free(json_str);
-                } else {
-                    ESP_LOGE(TAG, "Failed to allocate memory for JSON parsing");
-                }
-            } else {
-                ESP_LOGW(TAG, "Payload too large or invalid (len: %d)", event->data_len);
+                process_printer_data(index, topic, event->data, event->data_len);
             }
             break;
         }
-            
+        
         case MQTT_EVENT_ERROR: {
-            ESP_LOGE(TAG, "MQTT Error");
-            if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-                ESP_LOGE(TAG, "Last error code reported from esp-tls: 0x%x", 
-                        event->error_handle->esp_tls_last_esp_err);
-                ESP_LOGE(TAG, "Last tls stack error number: 0x%x", 
-                        event->error_handle->esp_tls_stack_err);
-            } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
-                ESP_LOGE(TAG, "Connection refused");
+            ESP_LOGE(TAG, "[%d] MQTT error", index);
+            if (event->error_handle) {
+                if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                    ESP_LOGE(TAG, "[%d] TLS error: 0x%x, stack: 0x%x", index,
+                            event->error_handle->esp_tls_last_esp_err,
+                            event->error_handle->esp_tls_stack_err);
+                }
             }
-            current_state = BAMBU_STATE_OFFLINE;
+            printer->state = BAMBU_STATE_OFFLINE;
             break;
         }
+        
+        case MQTT_EVENT_SUBSCRIBED:
+            ESP_LOGI(TAG, "[%d] Subscribed successfully", index);
+            break;
             
-        default: {
-            ESP_LOGD(TAG, "Other MQTT event: %d", event->event_id);
+        default:
+            ESP_LOGD(TAG, "[%d] MQTT event: %d", index, event->event_id);
             break;
-        }
     }
 }
 
 /**
- * @brief Fetch TLS certificate from Bambu printer
- * 
- * NOTE: Certificate fetching during query is complex and causing memory issues.
- * For now, we'll skip this step - certificates should be pre-configured or
- * we can add a separate "fetch certificate" button in the UI.
- * 
- * @param ip_address Printer IP address  
- * @param port TLS port (typically 8883)
- * @return NULL (certificate fetch skipped for stability)
+ * @brief Process incoming printer data and write to cache
  */
-char* bambu_fetch_tls_certificate(const char* ip_address, uint16_t port)
-{
-    if (!ip_address) {
-        ESP_LOGE(TAG, "Invalid IP address for certificate fetch");
-        return NULL;
-    }
-
-    ESP_LOGW(TAG, "Certificate fetch skipped - configure manually or use pre-extracted cert");
-    ESP_LOGW(TAG, "To extract cert: openssl s_client -connect %s:%d -showcerts < /dev/null 2>/dev/null | openssl x509 -outform PEM", 
-             ip_address, port);
+static void process_printer_data(int index, const char* topic, const char* data, int data_len) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) return;
     
-    return NULL;
+    printer_slot_t* printer = &printers[index];
+    
+    // Extract serial from topic (device/SERIAL/report)
+    char serial[64] = {0};
+    if (strncmp(topic, "device/", 7) == 0) {
+        const char* start = topic + 7;
+        const char* end = strchr(start, '/');
+        if (end && (end - start) < sizeof(serial)) {
+            strncpy(serial, start, end - start);
+        }
+    }
+    
+    // Use config device_id if serial not extracted
+    if (serial[0] == '\0' && printer->config.device_id) {
+        strncpy(serial, printer->config.device_id, sizeof(serial) - 1);
+    }
+    
+    ESP_LOGD(TAG, "[%d] Data from %s (%d bytes)", index, serial, data_len);
+    
+    // Parse JSON
+    if (data_len <= 0 || data_len > 65536) return;
+    
+    char* json_str = (char*)malloc(data_len + 1);
+    if (!json_str) return;
+    
+    memcpy(json_str, data, data_len);
+    json_str[data_len] = '\0';
+    
+    cJSON* json = cJSON_Parse(json_str);
+    free(json_str);
+    
+    if (!json) {
+        ESP_LOGW(TAG, "[%d] Failed to parse JSON", index);
+        return;
+    }
+    
+    // Update cached status
+    if (printer->last_status) {
+        cJSON_Delete(printer->last_status);
+    }
+    printer->last_status = json;
+    
+    // Extract printer state
+    cJSON* print_obj = cJSON_GetObjectItem(json, "print");
+    if (print_obj) {
+        cJSON* gcode_state = cJSON_GetObjectItem(print_obj, "gcode_state");
+        if (gcode_state && gcode_state->valuestring) {
+            if (strcmp(gcode_state->valuestring, "PRINTING") == 0 ||
+                strcmp(gcode_state->valuestring, "RUNNING") == 0) {
+                printer->state = BAMBU_STATE_PRINTING;
+            } else if (strcmp(gcode_state->valuestring, "PAUSE") == 0) {
+                printer->state = BAMBU_STATE_PAUSED;
+            } else if (strcmp(gcode_state->valuestring, "FAILED") == 0) {
+                printer->state = BAMBU_STATE_ERROR;
+            } else {
+                printer->state = BAMBU_STATE_IDLE;
+            }
+        }
+    }
+    
+    // Write minimal cache file (throttled to every 5 seconds)
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    
+    if (serial[0] != '\0' && (tv_now.tv_sec - printer->last_update >= 5)) {
+        printer->last_update = tv_now.tv_sec;
+        
+        // Create minimal JSON for cache
+        cJSON* mini = cJSON_CreateObject();
+        if (mini) {
+            cJSON_AddNumberToObject(mini, "last_update", tv_now.tv_sec);
+            
+            if (print_obj) {
+                // State
+                cJSON* state = cJSON_GetObjectItem(print_obj, "gcode_state");
+                cJSON_AddStringToObject(mini, "state", 
+                    state && state->valuestring ? state->valuestring : "IDLE");
+                
+                // Progress
+                cJSON* percent = cJSON_GetObjectItem(print_obj, "mc_percent");
+                cJSON_AddNumberToObject(mini, "progress", percent ? percent->valueint : 0);
+                
+                // Remaining time
+                cJSON* remaining = cJSON_GetObjectItem(print_obj, "mc_remaining_time");
+                cJSON_AddNumberToObject(mini, "remaining_min", remaining ? remaining->valueint : 0);
+                
+                // Layers
+                cJSON* layer = cJSON_GetObjectItem(print_obj, "layer_num");
+                cJSON* total_layer = cJSON_GetObjectItem(print_obj, "total_layer_num");
+                cJSON_AddNumberToObject(mini, "current_layer", layer ? layer->valueint : 0);
+                cJSON_AddNumberToObject(mini, "total_layers", total_layer ? total_layer->valueint : 0);
+                
+                // Temperatures
+                cJSON* nozzle = cJSON_GetObjectItem(print_obj, "nozzle_temper");
+                cJSON* nozzle_target = cJSON_GetObjectItem(print_obj, "nozzle_target_temper");
+                cJSON* bed = cJSON_GetObjectItem(print_obj, "bed_temper");
+                cJSON* bed_target = cJSON_GetObjectItem(print_obj, "bed_target_temper");
+                cJSON_AddNumberToObject(mini, "nozzle_temp", nozzle ? nozzle->valuedouble : 0);
+                cJSON_AddNumberToObject(mini, "nozzle_target", nozzle_target ? nozzle_target->valuedouble : 0);
+                cJSON_AddNumberToObject(mini, "bed_temp", bed ? bed->valuedouble : 0);
+                cJSON_AddNumberToObject(mini, "bed_target", bed_target ? bed_target->valuedouble : 0);
+                
+                // File name
+                cJSON* gcode_file = cJSON_GetObjectItem(print_obj, "gcode_file");
+                if (gcode_file && gcode_file->valuestring) {
+                    const char* fname = strrchr(gcode_file->valuestring, '/');
+                    cJSON_AddStringToObject(mini, "file_name", fname ? fname + 1 : gcode_file->valuestring);
+                }
+                
+                // WiFi
+                cJSON* wifi = cJSON_GetObjectItem(print_obj, "wifi_signal");
+                if (wifi && wifi->valuestring) {
+                    cJSON_AddStringToObject(mini, "wifi_signal", wifi->valuestring);
+                }
+            }
+            
+            // Write to file - try SD card first, fallback to SPIFFS
+            char* output = cJSON_PrintUnformatted(mini);
+            if (output) {
+                std::string path = get_printer_cache_path(serial);
+                FILE* f = fopen(path.c_str(), "w");
+                if (f) {
+                    size_t len = strlen(output);
+                    size_t written = fwrite(output, 1, len, f);
+                    fclose(f);
+                    if (written == len) {
+                        ESP_LOGI(TAG, "[%d] Cache updated: %s (%zu bytes)", index, path.c_str(), written);
+                    } else {
+                        ESP_LOGW(TAG, "[%d] Partial write to %s: %zu/%zu bytes", index, path.c_str(), written, len);
+                    }
+                } else {
+                    int save_errno = errno;
+                    ESP_LOGW(TAG, "[%d] Failed to write cache: %s (errno=%d)", index, path.c_str(), save_errno);
+                    
+                    // If SD card write failed, try SPIFFS as fallback
+                    if (path.find("/sdcard/") == 0) {
+                        std::string spiffs_path = std::string(SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
+                        
+                        // Make sure SPIFFS printer directory exists
+                        struct stat st;
+                        if (stat(SPIFFS_PRINTER_PATH, &st) != 0) {
+                            mkdir(SPIFFS_PRINTER_PATH, 0755);
+                        }
+                        
+                        f = fopen(spiffs_path.c_str(), "w");
+                        if (f) {
+                            size_t len = strlen(output);
+                            size_t written = fwrite(output, 1, len, f);
+                            fclose(f);
+                            if (written == len) {
+                                ESP_LOGI(TAG, "[%d] Cache written to SPIFFS fallback: %s (%zu bytes)", index, spiffs_path.c_str(), written);
+                            }
+                        } else {
+                            ESP_LOGE(TAG, "[%d] SPIFFS fallback also failed: %s (errno=%d)", index, spiffs_path.c_str(), errno);
+                        }
+                    }
+                }
+                cJSON_free(output);
+            }
+            cJSON_Delete(mini);
+        }
+    }
+    
+    // Notify handler
+    if (registered_handler) {
+        registered_handler(NULL, BAMBU_EVENT_BASE, BAMBU_STATUS_UPDATED, (void*)(intptr_t)index);
+    }
 }
 
-esp_err_t bambu_monitor_init(const bambu_printer_config_t* config)
-{
-    if (!config) {
-        ESP_LOGE(TAG, "Config is NULL");
-        return ESP_ERR_INVALID_ARG;
+/**
+ * @brief Free printer config strings
+ */
+static void free_printer_config(bambu_printer_config_t* config) {
+    if (config->device_id) { free(config->device_id); config->device_id = NULL; }
+    if (config->ip_address) { free(config->ip_address); config->ip_address = NULL; }
+    if (config->access_code) { free(config->access_code); config->access_code = NULL; }
+    if (config->tls_certificate) { free(config->tls_certificate); config->tls_certificate = NULL; }
+}
+
+// ============== Public API ==============
+
+esp_err_t bambu_monitor_init(void) {
+    if (monitor_initialized) {
+        ESP_LOGW(TAG, "Already initialized");
+        return ESP_OK;
     }
     
-    ESP_LOGI(TAG, "Initializing Bambu Monitor for device: %s at %s:%d", 
-             config->device_id, config->ip_address, config->port);
-    
-    // Save config for later use (for queries)
-    saved_config.device_id = config->device_id ? strdup(config->device_id) : NULL;
-    saved_config.ip_address = config->ip_address ? strdup(config->ip_address) : NULL;
-    saved_config.port = config->port;
-    saved_config.access_code = config->access_code ? strdup(config->access_code) : NULL;
-    saved_config.tls_certificate = config->tls_certificate ? strdup(config->tls_certificate) : NULL;
-    saved_config.disable_ssl_verify = config->disable_ssl_verify;
-    
-    // Configure MQTT client
-    esp_mqtt_client_config_t mqtt_cfg = {};
-    mqtt_cfg.broker.address.hostname = config->ip_address;
-    mqtt_cfg.broker.address.port = config->port;
-    mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
-    
-    // SSL/TLS Configuration - INSECURE MODE (bypass certificate validation)
-    // Bambu Lab printers use self-signed certificates that fail mbedTLS strict validation
-    // Home Assistant integration uses the same approach: ssl.CERT_NONE when disable_ssl_verify=True
-    // This is safe for LAN-only connections to known local devices
-    ESP_LOGI(TAG, "Configuring SSL in insecure mode (no certificate validation)");
-    
-    // With CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y in sdkconfig, esp-tls will skip verification
-    // We still need to set skip_cert_common_name_check to prevent name validation
-    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-    
-    ESP_LOGI(TAG, "SSL certificate validation disabled via CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY");
-    
-    // Authentication
-    mqtt_cfg.credentials.username = "bblp";
-    mqtt_cfg.credentials.authentication.password = config->access_code;
-    
-    // Buffer settings - Bambu printers send VERY large JSON payloads (50KB+)
-    mqtt_cfg.buffer.size = 65536;       // 64KB receive buffer (Bambu sends huge responses)
-    mqtt_cfg.buffer.out_size = 8192;    // 8KB send buffer
-    
-    // Task settings - increase stack size for larger buffers
-    mqtt_cfg.task.priority = 4;         // Priority 4 (lower than LVGL task which is 5)
-    mqtt_cfg.task.stack_size = 16384;   // 16KB stack (needed for large buffers)
-    
-    // Session settings
-    mqtt_cfg.session.keepalive = 60;
-    mqtt_cfg.session.disable_clean_session = false;
-    
-    // Create MQTT client
-    mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-    if (!mqtt_client) {
-        ESP_LOGE(TAG, "Failed to create MQTT client");
-        return ESP_FAIL;
+    // Initialize all printer slots
+    memset(printers, 0, sizeof(printers));
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        printers[i].state = BAMBU_STATE_OFFLINE;
     }
     
-    // Register event handler
-    esp_mqtt_client_register_event(mqtt_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    
-    // DO NOT start MQTT client yet - wait for WiFi to connect first
-    // The MQTT client will be started when WiFi connection is established
-    
-    ESP_LOGI(TAG, "Bambu Monitor configured (MQTT will connect after WiFi is ready)");
-    current_state = BAMBU_STATE_IDLE;
+    monitor_initialized = true;
+    ESP_LOGI(TAG, "Multi-printer monitor initialized (max %d printers)", BAMBU_MAX_PRINTERS);
     return ESP_OK;
 }
 
-bambu_printer_state_t bambu_get_printer_state(void)
-{
-    return current_state;
+esp_err_t bambu_monitor_init_single(const bambu_printer_config_t* config) {
+    esp_err_t ret = bambu_monitor_init();
+    if (ret != ESP_OK) return ret;
+    
+    int idx = bambu_add_printer(config);
+    return (idx >= 0) ? ESP_OK : ESP_FAIL;
 }
 
-cJSON* bambu_get_status_json(void)
-{
-    if (!last_status) {
+int bambu_add_printer(const bambu_printer_config_t* config) {
+    if (!monitor_initialized) {
+        ESP_LOGE(TAG, "Not initialized");
+        return -1;
+    }
+    
+    if (!config || !config->device_id || !config->ip_address || !config->access_code) {
+        ESP_LOGE(TAG, "Invalid config");
+        return -1;
+    }
+    
+    // Check if already exists
+    int existing = find_printer_by_device_id(config->device_id);
+    if (existing >= 0) {
+        ESP_LOGW(TAG, "Printer %s already at index %d", config->device_id, existing);
+        return existing;
+    }
+    
+    // Find empty slot
+    int index = -1;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (!printers[i].active) {
+            index = i;
+            break;
+        }
+    }
+    
+    if (index < 0) {
+        ESP_LOGE(TAG, "No free slots (max %d printers)", BAMBU_MAX_PRINTERS);
+        return -1;
+    }
+    
+    printer_slot_t* printer = &printers[index];
+    
+    // Copy config
+    printer->config.device_id = strdup(config->device_id);
+    printer->config.ip_address = strdup(config->ip_address);
+    printer->config.port = config->port > 0 ? config->port : 8883;
+    printer->config.access_code = strdup(config->access_code);
+    printer->config.disable_ssl_verify = config->disable_ssl_verify;
+    if (config->tls_certificate) {
+        printer->config.tls_certificate = strdup(config->tls_certificate);
+    }
+    
+    // Configure MQTT client
+    esp_mqtt_client_config_t mqtt_cfg = {};
+    mqtt_cfg.broker.address.hostname = printer->config.ip_address;
+    mqtt_cfg.broker.address.port = printer->config.port;
+    mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
+    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+    
+    mqtt_cfg.credentials.username = "bblp";
+    mqtt_cfg.credentials.authentication.password = printer->config.access_code;
+    
+    // Optimized buffer sizes for multi-printer (smaller than single)
+    mqtt_cfg.buffer.size = 16384;       // 16KB receive buffer
+    mqtt_cfg.buffer.out_size = 1024;    // 1KB send buffer
+    mqtt_cfg.task.priority = 3;         // Lower priority
+    mqtt_cfg.task.stack_size = 8192;    // 8KB stack per printer
+    mqtt_cfg.session.keepalive = 60;
+    
+    printer->mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+    if (!printer->mqtt_client) {
+        ESP_LOGE(TAG, "Failed to create MQTT client for %s", config->device_id);
+        free_printer_config(&printer->config);
+        return -1;
+    }
+    
+    // Register event handler with printer index as user data
+    esp_mqtt_client_register_event(printer->mqtt_client, (esp_mqtt_event_id_t)ESP_EVENT_ANY_ID, 
+                                   mqtt_event_handler, (void*)(intptr_t)index);
+    
+    printer->active = true;
+    printer->state = BAMBU_STATE_OFFLINE;
+    
+    ESP_LOGI(TAG, "[%d] Added printer: %s at %s:%d", 
+             index, config->device_id, config->ip_address, printer->config.port);
+    
+    return index;
+}
+
+esp_err_t bambu_remove_printer(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    printer_slot_t* printer = &printers[index];
+    
+    // Stop and destroy MQTT client
+    if (printer->mqtt_client) {
+        esp_mqtt_client_stop(printer->mqtt_client);
+        // Wait for TLS buffers to be freed
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_mqtt_client_destroy(printer->mqtt_client);
+        printer->mqtt_client = NULL;
+    }
+    
+    // Free status JSON
+    if (printer->last_status) {
+        cJSON_Delete(printer->last_status);
+        printer->last_status = NULL;
+    }
+    
+    // Free config
+    free_printer_config(&printer->config);
+    
+    printer->active = false;
+    printer->connected = false;
+    printer->state = BAMBU_STATE_OFFLINE;
+    
+    ESP_LOGI(TAG, "[%d] Printer removed", index);
+    return ESP_OK;
+}
+
+int bambu_get_printer_count(void) {
+    int count = 0;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active) count++;
+    }
+    return count;
+}
+
+esp_err_t bambu_monitor_deinit(void) {
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active) {
+            bambu_remove_printer(i);
+        }
+    }
+    
+    registered_handler = NULL;
+    monitor_initialized = false;
+    sdcard_available = -1;  // Reset SD card check for next init
+    
+    ESP_LOGI(TAG, "Monitor deinitialized");
+    return ESP_OK;
+}
+
+bambu_printer_state_t bambu_get_printer_state(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return BAMBU_STATE_OFFLINE;
+    }
+    return printers[index].state;
+}
+
+bambu_printer_state_t bambu_get_printer_state_default(void) {
+    // Return state of first active printer
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active) {
+            return printers[i].state;
+        }
+    }
+    return BAMBU_STATE_OFFLINE;
+}
+
+cJSON* bambu_get_status_json(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
         return NULL;
     }
-    return cJSON_Duplicate(last_status, 1);
+    if (!printers[index].last_status) {
+        return NULL;
+    }
+    return cJSON_Duplicate(printers[index].last_status, 1);
 }
 
-esp_err_t bambu_register_event_handler(esp_event_handler_t handler)
-{
+esp_err_t bambu_register_event_handler(esp_event_handler_t handler) {
     registered_handler = handler;
     return ESP_OK;
 }
 
-esp_err_t bambu_monitor_start(void)
-{
-    if (!mqtt_client) {
-        ESP_LOGE(TAG, "MQTT client not initialized");
-        return ESP_FAIL;
+esp_err_t bambu_monitor_start(void) {
+    int started = 0;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && !printers[i].connected) {
+            // Stagger connection starts to avoid concurrent TLS buffer allocations
+            // Each TLS handshake requires ~17KB temporary buffer
+            if (started > 0) {
+                ESP_LOGI(TAG, "Waiting 3 seconds before starting next printer connection...");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            }
+            if (bambu_start_printer(i) == ESP_OK) {
+                started++;
+            }
+        }
     }
-    
-    ESP_LOGI(TAG, "Starting MQTT client connection to printer");
-    esp_err_t ret = esp_mqtt_client_start(mqtt_client);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    return ESP_OK;
+    ESP_LOGI(TAG, "Started %d printer connection(s)", started);
+    return (started > 0) ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t bambu_monitor_deinit(void)
-{
-    if (mqtt_client) {
-        esp_mqtt_client_stop(mqtt_client);
-        esp_mqtt_client_destroy(mqtt_client);
-        mqtt_client = NULL;
-    }
-    
-    if (last_status) {
-        cJSON_Delete(last_status);
-        last_status = NULL;
-    }
-    
-    registered_handler = NULL;
-    current_state = BAMBU_STATE_OFFLINE;
-    
-    ESP_LOGI(TAG, "Bambu Monitor deinitialized");
-    return ESP_OK;
-}
-
-/**
- * @brief Connect to printer MQTT broker (can be called after init)
- */
-esp_err_t bambu_connect(const char* ip_address, uint16_t port, const char* access_code)
-{
-    if (mqtt_client) {
-        ESP_LOGW(TAG, "MQTT client already initialized");
-        return ESP_OK;
-    }
-    
-    if (!ip_address || !access_code) {
-        ESP_LOGE(TAG, "Invalid parameters");
+esp_err_t bambu_start_printer(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    // Configure MQTT client with TLS support for Bambu Lab printers
-    esp_mqtt_client_config_t mqtt_cfg = {};
-    
-    // Broker configuration
-    mqtt_cfg.broker.address.hostname = ip_address;
-    mqtt_cfg.broker.address.port = port;
-    mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
-    
-    // Broker verification - skip strict CN check for self-signed Bambu certs
-    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
-    
-    // Client credentials
-    mqtt_cfg.credentials.client_id = "esp32_tux";
-    mqtt_cfg.credentials.username = "bblp";
-    mqtt_cfg.credentials.authentication.password = access_code;
-    
-    // Buffer configuration
-    mqtt_cfg.buffer.size = 8192;
-    
-    // Network timeouts
-    mqtt_cfg.network.reconnect_timeout_ms = 10000;
-    mqtt_cfg.network.timeout_ms = 30000;
-    
-    // Keep-alive
-    mqtt_cfg.session.keepalive = 60;
-    
-    ESP_LOGI(TAG, "Creating MQTT connection to %s:%d", ip_address, port);
-    
-    // Create MQTT client
-    mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-    if (!mqtt_client) {
-        ESP_LOGE(TAG, "Failed to initialize MQTT client");
-        return ESP_FAIL;
+    if (!printers[index].mqtt_client) {
+        return ESP_ERR_INVALID_STATE;
     }
     
-    // Register event handler
-    esp_mqtt_client_register_event(mqtt_client, MQTT_EVENT_ANY, 
-                                  mqtt_event_handler, NULL);
-    
-    // Start MQTT client
-    esp_err_t ret = esp_mqtt_client_start(mqtt_client);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(ret));
-        esp_mqtt_client_destroy(mqtt_client);
-        mqtt_client = NULL;
-        return ret;
-    }
-    
-    ESP_LOGI(TAG, "MQTT connection initiated");
-    return ESP_OK;
+    ESP_LOGI(TAG, "[%d] Starting MQTT connection to %s", index, printers[index].config.ip_address);
+    return esp_mqtt_client_start(printers[index].mqtt_client);
 }
 
-/**
- * @brief Send MQTT query request to printer
- * 
- * Sends a "pushall" request to get complete printer status.
- * The printer will respond on device/{serial}/report topic.
- */
-esp_err_t bambu_send_query(void)
-{
-    if (!mqtt_client) {
-        ESP_LOGE(TAG, "MQTT client not initialized");
-        return ESP_FAIL;
-    }
-    
-    // Log current connection state
-    if (current_state != BAMBU_STATE_IDLE && current_state != BAMBU_STATE_PRINTING) {
-        ESP_LOGW(TAG, "MQTT not connected (state: %d), query may be queued", current_state);
-    }
-    
-    // Build query topic: device/{device_id}/request
-    char topic[128];
-    snprintf(topic, sizeof(topic), "device/%s/request", 
-             saved_config.device_id ? saved_config.device_id : "unknown");
-    
-    // Standard Bambu "pushall" command to request full status
-    const char* pushall_cmd = "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}";
-    
-    ESP_LOGI(TAG, "Sending pushall query to %s", topic);
-    
-    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, pushall_cmd, 0, 1, 0);
-    if (msg_id < 0) {
-        ESP_LOGE(TAG, "Failed to publish query (msg_id: %d)", msg_id);
-        return ESP_FAIL;
-    }
-    
-    ESP_LOGI(TAG, "Query sent successfully (msg_id: %d)", msg_id);
-    return ESP_OK;
-}
-
-/**
- * @brief Send custom MQTT command to printer
- */
-esp_err_t bambu_send_command(const char* command)
-{
-    if (!mqtt_client) {
-        ESP_LOGE(TAG, "MQTT client not initialized");
-        return ESP_FAIL;
-    }
-    
-    if (!command) {
-        ESP_LOGE(TAG, "Command is NULL");
+esp_err_t bambu_stop_printer(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    // Build request topic
+    if (printers[index].mqtt_client) {
+        esp_mqtt_client_stop(printers[index].mqtt_client);
+        printers[index].connected = false;
+        printers[index].state = BAMBU_STATE_OFFLINE;
+    }
+    
+    return ESP_OK;
+}
+
+esp_err_t bambu_send_query_index(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    if (!printers[index].mqtt_client || !printers[index].connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     char topic[128];
-    snprintf(topic, sizeof(topic), "device/%s/request", 
-             saved_config.device_id ? saved_config.device_id : "unknown");
+    snprintf(topic, sizeof(topic), "device/%s/request", printers[index].config.device_id);
     
-    ESP_LOGI(TAG, "Sending command to %s: %s", topic, command);
+    const char* cmd = "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}";
     
-    int msg_id = esp_mqtt_client_publish(mqtt_client, topic, command, 0, 1, 0);
+    int msg_id = esp_mqtt_client_publish(printers[index].mqtt_client, topic, cmd, 0, 1, 0);
     if (msg_id < 0) {
-        ESP_LOGE(TAG, "Failed to publish command (msg_id: %d)", msg_id);
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Command sent successfully (msg_id: %d)", msg_id);
+    ESP_LOGI(TAG, "[%d] Query sent (msg_id: %d)", index, msg_id);
     return ESP_OK;
+}
+
+esp_err_t bambu_send_query(void) {
+    int sent = 0;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].connected) {
+            if (bambu_send_query_index(i) == ESP_OK) {
+                sent++;
+            }
+        }
+    }
+    return (sent > 0) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t bambu_send_command(int index, const char* command) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    if (!printers[index].mqtt_client || !printers[index].connected || !command) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    
+    char topic[128];
+    snprintf(topic, sizeof(topic), "device/%s/request", printers[index].config.device_id);
+    
+    int msg_id = esp_mqtt_client_publish(printers[index].mqtt_client, topic, command, 0, 1, 0);
+    return (msg_id >= 0) ? ESP_OK : ESP_FAIL;
+}
+
+const char* bambu_get_device_id(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return NULL;
+    }
+    return printers[index].config.device_id;
+}
+
+bool bambu_is_printer_active(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS) {
+        return false;
+    }
+    return printers[index].active;
 }

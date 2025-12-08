@@ -25,10 +25,12 @@ SOFTWARE.
 #include "ota.h"
 #include "widgets/tux_panel.h"
 #include "widgets/carousel_widget.hpp"
+#include "i18n/lang.hpp"  // Internationalization support
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include "OpenWeatherMap.hpp"
 #include "apps/weather/weathericons.h"
+#include "apps/printer/printericons.h"
 #include "events/gui_events.hpp"
 #include <esp_partition.h>
 #include "SettingsConfig.hpp"
@@ -93,6 +95,37 @@ static CarouselWidget *carousel_widget = nullptr;
 
 // Slide countries map by INDEX (lazy initialization to avoid static init issues)
 static std::map<int, std::string> *slide_country_by_index_ptr = nullptr;
+
+// Storage paths for printer cache - prefer SD card over SPIFFS
+#define GUI_SDCARD_PRINTER_PATH "/sdcard/printer"
+#define GUI_SPIFFS_PRINTER_PATH "/spiffs/printer"
+
+// Get full path to a printer cache file
+// Checks SD card first, then SPIFFS for existing files
+// Returns SD card path if SD is available, otherwise SPIFFS
+static std::string gui_get_printer_file_path(const std::string& serial) {
+    struct stat st;
+    std::string sdcard_path = std::string(GUI_SDCARD_PRINTER_PATH) + "/" + serial + ".json";
+    std::string spiffs_path = std::string(GUI_SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
+    
+    // First check if file exists on SD card
+    if (stat(sdcard_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+        return sdcard_path;
+    }
+    
+    // Check if file exists on SPIFFS
+    if (stat(spiffs_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+        return spiffs_path;
+    }
+    
+    // File doesn't exist yet - return SD card path if SD is mounted
+    if (stat("/sdcard", &st) == 0 && S_ISDIR(st.st_mode)) {
+        return sdcard_path;
+    }
+    
+    // Default to SPIFFS
+    return spiffs_path;
+}
 
 // UI IPC queue for marshaling data into the LVGL task context
 enum class ui_ipc_type : uint8_t {
@@ -265,11 +298,12 @@ static int current_page = 0;
 
 void lv_setup_styles()
 {
-    font_symbol = &lv_font_montserrat_14;
-    font_normal = &lv_font_montserrat_14;
-    font_large = &lv_font_montserrat_16;
-    font_xl = &lv_font_montserrat_24;
-    font_xxl = &lv_font_montserrat_32;
+    // Use Polish fonts with Latin Extended characters for diacritics
+    font_symbol = &font_montserrat_pl_14;
+    font_normal = &font_montserrat_pl_14;
+    font_large = &font_montserrat_pl_16;
+    font_xl = &font_montserrat_pl_24;
+    font_xxl = &font_montserrat_pl_32;
     font_fa = &font_fa_14;
 
     screen_h = lv_obj_get_height(lv_scr_act());
@@ -502,7 +536,7 @@ static void create_footer(lv_obj_t *parent)
     static const char * btnm_map[] = {LV_SYMBOL_HOME, "\xEF\x97\xB3", FA_SYMBOL_SETTINGS, LV_SYMBOL_DOWNLOAD,  NULL};
     lv_obj_t * footerButtons = lv_btnmatrix_create(panel_footer);
     lv_btnmatrix_set_map(footerButtons, btnm_map);
-    lv_obj_set_style_text_font(footerButtons,&lv_font_montserrat_16,LV_PART_ITEMS);
+    lv_obj_set_style_text_font(footerButtons,&font_montserrat_pl_16,LV_PART_ITEMS);
     lv_obj_set_style_bg_opa(footerButtons,LV_OPA_TRANSP,0);
     lv_obj_set_size(footerButtons,LV_PCT(100),LV_PCT(100));
     lv_obj_set_style_border_width(footerButtons,0,LV_PART_MAIN | LV_PART_ITEMS);
@@ -706,7 +740,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
     lbl_webui_url = lv_label_create(cont_1);
     lv_obj_set_size(lbl_webui_url, LV_PCT(90), LV_SIZE_CONTENT);
     lv_label_set_long_mode(lbl_webui_url, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl_webui_url, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_webui_url, &font_montserrat_pl_14, 0);
     lv_label_set_text(lbl_webui_url, "Web UI: Waiting for IP...");
 
     // Check for Updates button
@@ -872,6 +906,16 @@ static void create_page_home(lv_obj_t *parent)
         lv_obj_add_event_cb(carousel_widget->container, datetime_event_cb, LV_EVENT_MSG_RECEIVED, NULL);
         lv_msg_subscribe_obj(MSG_TIME_CHANGED, carousel_widget->container, NULL);
         
+        // Subscribe to config changes (web UI added/removed locations or printers)
+        lv_msg_subscribe(MSG_CONFIG_CHANGED, [](void *s, lv_msg_t *m) {
+            ESP_LOGI("GUI", "MSG_CONFIG_CHANGED received - rebuilding carousel");
+            // Reload config from disk before rebuilding
+            if (cfg) {
+                cfg->load_config();
+            }
+            update_carousel_slides();
+        }, NULL);
+        
         // Weather updates via file polling - no event subscription needed
         // weather_event_cb removed - poll_weather_files() reads from /spiffs/weather/<city>.json
         
@@ -894,18 +938,31 @@ static void update_carousel_slides()
     
     // Add weather location slides with more descriptive info
     if (cfg) {
+        bool has_api_key = !cfg->WeatherAPIkey.empty();
         int weather_count = cfg->get_weather_location_count();
         for (int i = 0; i < weather_count; i++) {
             weather_location_t loc = cfg->get_weather_location(i);
             if (loc.enabled) {
                 carousel_slide_t slide;
+                slide.type = SLIDE_TYPE_WEATHER;  // Mark as weather slide
                 // Use city name as title, country as subtitle with time placeholder
                 slide.title = loc.city.empty() ? loc.name : loc.city;
                 slide.subtitle = "--:-- • " + loc.country;
-                slide.value1 = "--°C";  // Will be updated by weather callback
-                slide.value2 = "Loading weather...";  // Will be updated by weather callback
-                slide.value3 = "H: --° L: --° • Humidity: --%";  // Temp range and humidity
-                slide.value4 = "Wind: -- m/s • Pressure: -- hPa";  // Wind and pressure
+                if (has_api_key) {
+                    slide.value1 = "--°C";  // Will be updated by weather callback
+                    slide.value2 = TR(STR_LOADING_WEATHER);  // Will be updated by weather callback
+                    char humidity_buf[64];
+                    snprintf(humidity_buf, sizeof(humidity_buf), "%s: --° %s: --° • %s: --%%", TR(STR_HIGH), TR(STR_LOW), TR(STR_HUMIDITY));
+                    slide.value3 = humidity_buf;  // Temp range and humidity
+                    char pressure_buf[64];
+                    snprintf(pressure_buf, sizeof(pressure_buf), "%s: -- m/s • %s: -- hPa", TR(STR_WIND), TR(STR_PRESSURE));
+                    slide.value4 = pressure_buf;  // Wind and pressure
+                } else {
+                    slide.value1 = LV_SYMBOL_WARNING;
+                    slide.value2 = TR(STR_API_KEY_MISSING);
+                    slide.value3 = TR(STR_GO_TO_SETTINGS);
+                    slide.value4 = TR(STR_ADD_API_KEY);
+                }
                 slide.bg_color = lv_color_hex(0x1e3a5f);  // Blue weather theme
                 if (!slide_country_by_index_ptr) slide_country_by_index_ptr = new std::map<int, std::string>();
                 int slide_index = carousel_widget ? carousel_widget->slides.size() : 0;
@@ -926,7 +983,7 @@ static void update_carousel_slides()
             if (!printer.enabled) continue;
             
             // Check if printer has recent data (is online)
-            std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+            std::string filepath = gui_get_printer_file_path(printer.serial);
             FILE *f = fopen(filepath.c_str(), "r");
             bool is_online = false;
             
@@ -961,10 +1018,14 @@ static void update_carousel_slides()
             if (is_online) {
                 carousel_slide_t slide;
                 slide.title = printer.name;
-                slide.subtitle = "Status: Idle";  // Will be updated by printer callback
+                slide.subtitle = TR(STR_IDLE);  // Will be updated by printer callback
                 slide.value1 = "0%";  // Progress - will be updated
-                slide.value2 = "Nozzle: 0°C";  // Will be updated
+                slide.value2 = "";  // Will be updated
+                slide.value3 = "";  // Layer info - will be updated
+                slide.value4 = "";  // File name - will be updated
                 slide.bg_color = lv_color_hex(0x3a1e2f);  // Purple printer theme
+                slide.icon_code = 0xf04d;  // FA_PRINTER_STOP (idle icon)
+                slide.type = SLIDE_TYPE_PRINTER;  // Mark as printer slide
                 carousel_widget->add_slide(slide);
                 ESP_LOGI(TAG, "Added online printer %s to carousel", printer.name.c_str());
             } else {
@@ -977,9 +1038,9 @@ static void update_carousel_slides()
     // If only the time slide exists, add a welcome message
     if (carousel_widget->slides.size() == 1) {
         carousel_slide_t placeholder;
-        placeholder.title = "Welcome to TUX";
-        placeholder.subtitle = "Add locations & printers";
-        placeholder.value1 = "to see more info";
+        placeholder.title = TR(STR_WELCOME_TITLE);
+        placeholder.subtitle = TR(STR_WELCOME_SUBTITLE);
+        placeholder.value1 = TR(STR_WELCOME_MSG);
         placeholder.value2 = "";
         placeholder.bg_color = lv_color_hex(0x2a2a2a);
         carousel_widget->add_slide(placeholder);
@@ -1007,33 +1068,170 @@ static void create_page_updates(lv_obj_t *parent)
 
 static void create_page_bambu(lv_obj_t *parent)
 {
-    /* BAMBU MONITOR PAGE PANELS */
-    lv_obj_t *panel = tux_panel_create(parent, "🖨️ PRINTER", LV_SIZE_CONTENT);
+    /* BAMBU MONITOR PAGE - Rich status display with icons */
+    
+    // Main panel
+    lv_obj_t *panel = tux_panel_create(parent, "PRINTER STATUS", LV_SIZE_CONTENT);
     lv_obj_add_style(panel, &style_ui_island, 0);
     
     lv_obj_t *cont = tux_panel_get_content(panel);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_gap(cont, 8, 0);
     
-    // Status label
-    lv_obj_t *lbl_status = lv_label_create(cont);
-    lv_label_set_text(lbl_status, "Status: Offline");
+    // === STATUS ROW: Icon + State ===
+    lv_obj_t *row_status = lv_obj_create(cont);
+    lv_obj_set_size(row_status, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row_status, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row_status, 0, 0);
+    lv_obj_set_style_pad_all(row_status, 0, 0);
+    lv_obj_set_flex_flow(row_status, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row_status, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     
-    // Progress label
-    lv_obj_t *lbl_progress = lv_label_create(cont);
-    lv_label_set_text(lbl_progress, "Progress: --");
+    // Status icon (large)
+    lv_obj_t *lbl_status_icon = lv_label_create(row_status);
+    lv_obj_set_style_text_font(lbl_status_icon, &font_fa_printer_42, 0);
+    lv_obj_set_style_text_color(lbl_status_icon, lv_color_hex(COLOR_PRINTER_IDLE), 0);
+    lv_label_set_text(lbl_status_icon, FA_PRINTER_STOP);
+    lv_obj_set_style_pad_right(lbl_status_icon, 12, 0);
     
-    // Temperature label
-    lv_obj_t *lbl_temps = lv_label_create(cont);
-    lv_label_set_text(lbl_temps, "Bed: -- Nozzle: --");
+    // Status text column
+    lv_obj_t *col_status = lv_obj_create(row_status);
+    lv_obj_set_size(col_status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(col_status, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(col_status, 0, 0);
+    lv_obj_set_style_pad_all(col_status, 0, 0);
+    lv_obj_set_flex_flow(col_status, LV_FLEX_FLOW_COLUMN);
     
-    // Test Query Button
-    lv_obj_t *btn_query = lv_btn_create(cont);
-    lv_obj_set_size(btn_query, 200, 50);
+    lv_obj_t *lbl_status = lv_label_create(col_status);
+    lv_obj_set_style_text_font(lbl_status, &font_montserrat_pl_24, 0);
+    lv_label_set_text(lbl_status, "Offline");
+    
+    lv_obj_t *lbl_file = lv_label_create(col_status);
+    lv_obj_set_style_text_color(lbl_file, lv_palette_main(LV_PALETTE_GREY), 0);
+    lv_label_set_text(lbl_file, "No active job");
+    lv_label_set_long_mode(lbl_file, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_width(lbl_file, 250);
+    
+    // === PROGRESS ROW ===
+    lv_obj_t *row_progress = lv_obj_create(cont);
+    lv_obj_set_size(row_progress, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row_progress, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row_progress, 0, 0);
+    lv_obj_set_style_pad_all(row_progress, 0, 0);
+    lv_obj_set_flex_flow(row_progress, LV_FLEX_FLOW_COLUMN);
+    
+    // Progress bar
+    lv_obj_t *bar_progress = lv_bar_create(row_progress);
+    lv_obj_set_size(bar_progress, LV_PCT(100), 16);
+    lv_bar_set_range(bar_progress, 0, 100);
+    lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar_progress, lv_palette_darken(LV_PALETTE_GREY, 3), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar_progress, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
+    
+    // Progress info row (percentage + time + layers)
+    lv_obj_t *row_info = lv_obj_create(row_progress);
+    lv_obj_set_size(row_info, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row_info, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row_info, 0, 0);
+    lv_obj_set_style_pad_all(row_info, 4, 0);
+    lv_obj_set_flex_flow(row_info, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row_info, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    lv_obj_t *lbl_percent = lv_label_create(row_info);
+    lv_label_set_text(lbl_percent, "0%");
+    lv_obj_set_style_text_font(lbl_percent, &font_montserrat_pl_16, 0);
+    
+    // Time remaining with icon
+    lv_obj_t *time_container = lv_obj_create(row_info);
+    lv_obj_set_size(time_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(time_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(time_container, 0, 0);
+    lv_obj_set_style_pad_all(time_container, 0, 0);
+    lv_obj_set_flex_flow(time_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(time_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    lv_obj_t *lbl_time_icon = lv_label_create(time_container);
+    lv_obj_set_style_text_font(lbl_time_icon, &font_fa_printer_42, 0);
+    lv_obj_set_style_text_color(lbl_time_icon, lv_palette_main(LV_PALETTE_BLUE), 0);
+    lv_label_set_text(lbl_time_icon, FA_PRINTER_CLOCK);
+    lv_obj_set_style_transform_zoom(lbl_time_icon, 128, 0);  // Scale down to ~50%
+    
+    lv_obj_t *lbl_time = lv_label_create(time_container);
+    lv_label_set_text(lbl_time, "--:--");
+    
+    lv_obj_t *lbl_layers = lv_label_create(row_info);
+    lv_label_set_text(lbl_layers, "L: --/--");
+    
+    // === TEMPERATURE ROW ===
+    lv_obj_t *row_temps = lv_obj_create(cont);
+    lv_obj_set_size(row_temps, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(row_temps, lv_palette_darken(LV_PALETTE_GREY, 4), 0);
+    lv_obj_set_style_bg_opa(row_temps, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(row_temps, 0, 0);
+    lv_obj_set_style_radius(row_temps, 8, 0);
+    lv_obj_set_style_pad_all(row_temps, 8, 0);
+    lv_obj_set_flex_flow(row_temps, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row_temps, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // Nozzle temp
+    lv_obj_t *nozzle_cont = lv_obj_create(row_temps);
+    lv_obj_set_size(nozzle_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(nozzle_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(nozzle_cont, 0, 0);
+    lv_obj_set_style_pad_all(nozzle_cont, 0, 0);
+    lv_obj_set_flex_flow(nozzle_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(nozzle_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    lv_obj_t *lbl_nozzle_icon = lv_label_create(nozzle_cont);
+    lv_obj_set_style_text_font(lbl_nozzle_icon, &font_fa_printer_42, 0);
+    lv_obj_set_style_text_color(lbl_nozzle_icon, lv_color_hex(COLOR_PRINTER_HEATING), 0);
+    lv_label_set_text(lbl_nozzle_icon, FA_PRINTER_FIRE);
+    lv_obj_set_style_transform_zoom(lbl_nozzle_icon, 154, 0);  // Scale down to ~60%
+    lv_obj_set_style_pad_right(lbl_nozzle_icon, 4, 0);
+    
+    lv_obj_t *lbl_nozzle = lv_label_create(nozzle_cont);
+    lv_obj_set_style_text_font(lbl_nozzle, &font_montserrat_pl_16, 0);
+    lv_label_set_text(lbl_nozzle, "N: --°C");
+    
+    // Bed temp
+    lv_obj_t *bed_cont = lv_obj_create(row_temps);
+    lv_obj_set_size(bed_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(bed_cont, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bed_cont, 0, 0);
+    lv_obj_set_style_pad_all(bed_cont, 0, 0);
+    lv_obj_set_flex_flow(bed_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bed_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    lv_obj_t *lbl_bed_icon = lv_label_create(bed_cont);
+    lv_obj_set_style_text_font(lbl_bed_icon, &font_fa_printer_42, 0);
+    lv_obj_set_style_text_color(lbl_bed_icon, lv_color_hex(COLOR_PRINTER_HEATING), 0);
+    lv_label_set_text(lbl_bed_icon, FA_PRINTER_SUN);
+    lv_obj_set_style_transform_zoom(lbl_bed_icon, 154, 0);  // Scale down to ~60%
+    lv_obj_set_style_pad_right(lbl_bed_icon, 4, 0);
+    
+    lv_obj_t *lbl_bed = lv_label_create(bed_cont);
+    lv_obj_set_style_text_font(lbl_bed, &font_montserrat_pl_16, 0);
+    lv_label_set_text(lbl_bed, "B: --°C");
+    
+    // === BUTTON ROW ===
+    lv_obj_t *row_buttons = lv_obj_create(cont);
+    lv_obj_set_size(row_buttons, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row_buttons, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row_buttons, 0, 0);
+    lv_obj_set_style_pad_all(row_buttons, 0, 0);
+    lv_obj_set_style_pad_top(row_buttons, 8, 0);
+    lv_obj_set_flex_flow(row_buttons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row_buttons, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // Refresh button
+    lv_obj_t *btn_query = lv_btn_create(row_buttons);
+    lv_obj_set_size(btn_query, 140, 40);
+    lv_obj_set_style_bg_color(btn_query, lv_palette_main(LV_PALETTE_BLUE), 0);
     lv_obj_t *lbl_query = lv_label_create(btn_query);
-    lv_label_set_text(lbl_query, "Send Query");
+    lv_label_set_text(lbl_query, "Refresh");
     lv_obj_center(lbl_query);
     lv_obj_add_event_cb(btn_query, [](lv_event_t *e) {
-        ESP_LOGI("GUI", "Query button clicked - sending MQTT query");
+        ESP_LOGI("GUI", "Refresh button - sending MQTT query");
         esp_err_t ret = bambu_send_query();
         if (ret == ESP_OK) {
             ESP_LOGI("GUI", "Query sent successfully");
@@ -1042,10 +1240,99 @@ static void create_page_bambu(lv_obj_t *parent)
         }
     }, LV_EVENT_CLICKED, NULL);
     
-    // Subscribe to Bambu messages
+    // Store widget references for callbacks using user_data on the panel
+    // We'll use a simple struct to hold all the label pointers
+    typedef struct {
+        lv_obj_t *status_icon;
+        lv_obj_t *status;
+        lv_obj_t *file;
+        lv_obj_t *bar;
+        lv_obj_t *percent;
+        lv_obj_t *time;
+        lv_obj_t *layers;
+        lv_obj_t *nozzle;
+        lv_obj_t *bed;
+    } bambu_widgets_t;
+    
+    static bambu_widgets_t widgets;
+    widgets.status_icon = lbl_status_icon;
+    widgets.status = lbl_status;
+    widgets.file = lbl_file;
+    widgets.bar = bar_progress;
+    widgets.percent = lbl_percent;
+    widgets.time = lbl_time;
+    widgets.layers = lbl_layers;
+    widgets.nozzle = lbl_nozzle;
+    widgets.bed = lbl_bed;
+    
+    // Subscribe to full update message
+    lv_msg_subscribe(MSG_BAMBU_FULL_UPDATE, [](void *s, lv_msg_t *m) {
+        bambu_widgets_t *w = (bambu_widgets_t *)s;
+        const bambu_printer_data_t *data = (const bambu_printer_data_t *)lv_msg_get_payload(m);
+        if (!data || !w) return;
+        
+        // Update status icon and color based on state
+        const char *icon = FA_PRINTER_STOP;
+        uint32_t color = COLOR_PRINTER_IDLE;
+        
+        if (strcmp(data->state, "RUNNING") == 0) {
+            icon = FA_PRINTER_PLAY;
+            color = COLOR_PRINTER_PRINTING;
+        } else if (strcmp(data->state, "PAUSE") == 0) {
+            icon = FA_PRINTER_PAUSE;
+            color = COLOR_PRINTER_PAUSED;
+        } else if (strcmp(data->state, "FINISH") == 0) {
+            icon = FA_PRINTER_CHECK;
+            color = COLOR_PRINTER_COMPLETE;
+        } else if (strcmp(data->state, "FAILED") == 0 || strcmp(data->state, "ERROR") == 0) {
+            icon = FA_PRINTER_WARNING;
+            color = COLOR_PRINTER_ERROR;
+        }
+        
+        if (lv_obj_is_valid(w->status_icon)) {
+            lv_label_set_text(w->status_icon, icon);
+            lv_obj_set_style_text_color(w->status_icon, lv_color_hex(color), 0);
+        }
+        if (lv_obj_is_valid(w->status)) {
+            lv_label_set_text(w->status, data->state);
+        }
+        if (lv_obj_is_valid(w->file)) {
+            lv_label_set_text(w->file, data->subtask_name[0] ? data->subtask_name : "No active job");
+        }
+        if (lv_obj_is_valid(w->bar)) {
+            lv_bar_set_value(w->bar, data->progress, LV_ANIM_ON);
+        }
+        if (lv_obj_is_valid(w->percent)) {
+            lv_label_set_text_fmt(w->percent, "%d%%", data->progress);
+        }
+        if (lv_obj_is_valid(w->time)) {
+            if (data->remaining_min > 0) {
+                int hours = data->remaining_min / 60;
+                int mins = data->remaining_min % 60;
+                lv_label_set_text_fmt(w->time, "%d:%02d", hours, mins);
+            } else {
+                lv_label_set_text(w->time, "--:--");
+            }
+        }
+        if (lv_obj_is_valid(w->layers)) {
+            if (data->total_layers > 0) {
+                lv_label_set_text_fmt(w->layers, "L: %d/%d", data->current_layer, data->total_layers);
+            } else {
+                lv_label_set_text(w->layers, "L: --/--");
+            }
+        }
+        if (lv_obj_is_valid(w->nozzle)) {
+            lv_label_set_text_fmt(w->nozzle, "N: %.0f°C", data->nozzle_temp);
+        }
+        if (lv_obj_is_valid(w->bed)) {
+            lv_label_set_text_fmt(w->bed, "B: %.0f°C", data->bed_temp);
+        }
+    }, &widgets);
+    
+    // Legacy subscriptions for backward compatibility
     lv_msg_subscribe(MSG_BAMBU_STATUS, bambu_status_cb, lbl_status);
-    lv_msg_subscribe(MSG_BAMBU_PROGRESS, bambu_progress_cb, lbl_progress);
-    lv_msg_subscribe(MSG_BAMBU_TEMPS, bambu_temps_cb, lbl_temps);
+    lv_msg_subscribe(MSG_BAMBU_PROGRESS, bambu_progress_cb, lbl_percent);
+    lv_msg_subscribe(MSG_BAMBU_TEMPS, bambu_temps_cb, lbl_nozzle);
 }
 
 static void create_splash_screen()
@@ -1069,7 +1356,7 @@ static void create_splash_screen()
     // MyBestTools text
     lv_obj_t * splash_text = lv_label_create(splash_container);
     lv_label_set_text(splash_text, "MyBestTools");
-    lv_obj_set_style_text_font(splash_text, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(splash_text, &font_montserrat_pl_24, 0);
     lv_obj_set_style_text_color(splash_text, lv_color_white(), 0);
 
     //lv_scr_load_anim(splash_screen, LV_SCR_LOAD_ANIM_FADE_IN, 5000, 10, true);
@@ -1250,7 +1537,7 @@ void switch_theme(bool dark)
         theme_current = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE),
                                               lv_palette_main(LV_PALETTE_GREEN),
                                               1, /*Light or dark mode*/
-                                              &lv_font_montserrat_14);
+                                              &font_montserrat_pl_14);
         bg_theme_color = lv_palette_darken(LV_PALETTE_GREY, 5);
         lv_disp_set_theme(disp, theme_current);
         //bg_theme_color = theme_current->flags & LV_USE_THEME_DEFAULT ? lv_palette_darken(LV_PALETTE_GREY, 5) : lv_palette_lighten(LV_PALETTE_GREY, 2);
@@ -1267,7 +1554,7 @@ void switch_theme(bool dark)
                                               lv_palette_main(LV_PALETTE_BLUE),
                                               lv_palette_main(LV_PALETTE_RED),
                                               0, /*Light or dark mode*/
-                                              &lv_font_montserrat_14);
+                                              &font_montserrat_pl_14);
         //bg_theme_color = lv_palette_lighten(LV_PALETTE_GREY, 5);    // #BFBFBD
         // bg_theme_color = lv_color_make(0,0,255); 
         bg_theme_color = lv_color_hex(0xBFBFBD); //383837
@@ -1362,8 +1649,14 @@ static void update_time_ui_from_tm(const struct tm *dtinfo)
     ESP_LOGD(TAG, "update_time_ui_from_tm: %s (panels=%d)",
              g_subtitle_buf, carousel_widget->slide_panels.size());
 
-    // Update ALL slide panels
+    // Update ONLY WEATHER slide panels (not printer slides)
     for (size_t i = 0; i < carousel_widget->slide_panels.size(); i++) {
+        // Skip printer slides - they show status, not time
+        if (i < carousel_widget->slides.size() && 
+            carousel_widget->slides[i].type == SLIDE_TYPE_PRINTER) {
+            continue;
+        }
+        
         lv_obj_t *panel = carousel_widget->slide_panels[i];
 
         // Robust NULL checks
@@ -1470,23 +1763,81 @@ static void poll_weather_files()
     if (!carousel_widget || carousel_widget->slide_panels.empty()) return;
     if (!cfg) return;
 
+    // Track API key status - rebuild carousel when it changes
+    static bool last_has_api_key = false;
+    bool has_api_key = !cfg->WeatherAPIkey.empty();
+    if (has_api_key != last_has_api_key) {
+        ESP_LOGI(TAG, "Weather API key status changed: %s -> %s, rebuilding carousel",
+                 last_has_api_key ? "set" : "not set", has_api_key ? "set" : "not set");
+        last_has_api_key = has_api_key;
+        update_carousel_slides();
+        return;  // Carousel rebuilt, let next poll update the data
+    }
+
+    // Track weather location count - rebuild carousel when locations added/removed
+    static int last_weather_location_count = -1;
     int weather_count = cfg->get_weather_location_count();
-    for (int i = 0; i < weather_count && i < (int)carousel_widget->slide_panels.size(); i++) {
-        weather_location_t loc = cfg->get_weather_location(i);
-        if (!loc.enabled) continue;
+    int enabled_count = 0;
+    for (int i = 0; i < weather_count; i++) {
+        if (cfg->get_weather_location(i).enabled) enabled_count++;
+    }
+    if (last_weather_location_count != enabled_count) {
+        ESP_LOGI(TAG, "Weather location count changed: %d -> %d, rebuilding carousel",
+                 last_weather_location_count, enabled_count);
+        last_weather_location_count = enabled_count;
+        update_carousel_slides();
+        return;  // Carousel rebuilt, let next poll update the data
+    }
 
-        // Build filename: /spiffs/weather/<city_lowercase>.json
-        std::string safe_name = loc.city;
-        for (char &c : safe_name) {
-            if (c == ' ') c = '_';
-            else c = tolower(c);
+    // Iterate over weather slides (type check) and try multiple filename patterns
+    int slide_idx = 0;
+    for (size_t panel_idx = 0; panel_idx < carousel_widget->slide_panels.size(); panel_idx++) {
+        // Check if this is a weather slide
+        if (panel_idx >= carousel_widget->slides.size()) continue;
+        if (carousel_widget->slides[panel_idx].type != SLIDE_TYPE_WEATHER) continue;
+        
+        // Get the weather location config for this weather slide
+        if (slide_idx >= weather_count) continue;
+        
+        // Find enabled location at this index
+        int enabled_idx = 0;
+        int config_idx = -1;
+        for (int i = 0; i < weather_count; i++) {
+            if (cfg->get_weather_location(i).enabled) {
+                if (enabled_idx == slide_idx) {
+                    config_idx = i;
+                    break;
+                }
+                enabled_idx++;
+            }
         }
-        std::string filepath = "/spiffs/weather/" + safe_name + ".json";
+        if (config_idx < 0) { slide_idx++; continue; }
+        
+        weather_location_t loc = cfg->get_weather_location(config_idx);
+        slide_idx++;  // Increment for next weather slide
 
-        // Read the JSON file
-        FILE *f = fopen(filepath.c_str(), "r");
+        // Try multiple filename patterns:
+        // 1. Based on config city name
+        // 2. Based on config location name  
+        // 3. Based on the API-returned name (might be different language)
+        std::vector<std::string> names_to_try = {loc.city, loc.name};
+        
+        FILE *f = nullptr;
+        std::string filepath;
+        for (const auto& name : names_to_try) {
+            if (name.empty()) continue;
+            std::string safe_name = name;
+            for (char &c : safe_name) {
+                if (c == ' ') c = '_';
+                else c = tolower(c);
+            }
+            filepath = "/spiffs/weather/" + safe_name + ".json";
+            f = fopen(filepath.c_str(), "r");
+            if (f) break;
+        }
+        
         if (!f) {
-            ESP_LOGD(TAG, "Weather file not found: %s", filepath.c_str());
+            ESP_LOGD(TAG, "Weather file not found for: %s / %s", loc.city.c_str(), loc.name.c_str());
             continue;
         }
 
@@ -1540,7 +1891,7 @@ static void poll_weather_files()
         const char *description = weather_item ? cJSON_GetObjectItem(weather_item, "description")->valuestring : "N/A";
 
         // Update the carousel panel
-        lv_obj_t *panel = carousel_widget->slide_panels[i];
+        lv_obj_t *panel = carousel_widget->slide_panels[panel_idx];
         if (!panel || !lv_obj_is_valid(panel)) {
             cJSON_Delete(root);
             continue;
@@ -1573,13 +1924,13 @@ static void poll_weather_files()
         }
 
         if (value3 && lv_obj_is_valid(value3)) {
-            snprintf(range_buf, sizeof(range_buf), "H: %.1f° L: %.1f° • Humidity: %d%%",
-                     temp_high, temp_low, humidity);
+            snprintf(range_buf, sizeof(range_buf), "%s: %.1f° %s: %.1f° • %s: %d%%",
+                     TR(STR_HIGH), temp_high, TR(STR_LOW), temp_low, TR(STR_HUMIDITY), humidity);
             lv_label_set_text(value3, range_buf);
         }
 
         if (value4 && lv_obj_is_valid(value4)) {
-            snprintf(pressure_buf, sizeof(pressure_buf), "Pressure: %d hPa", pressure);
+            snprintf(pressure_buf, sizeof(pressure_buf), "%s: %d hPa", TR(STR_PRESSURE), pressure);
             lv_label_set_text(value4, pressure_buf);
         }
 
@@ -1593,7 +1944,7 @@ static void poll_weather_files()
             lv_obj_set_style_text_color(icon_lbl, icon_color, 0);
         }
 
-        ESP_LOGD(TAG, "Updated panel %d from file: %s (%.1f°C)", i, city_name, temp);
+        ESP_LOGD(TAG, "Updated panel %d from file: %s (%.1f°C)", (int)panel_idx, city_name, temp);
         cJSON_Delete(root);
     }
 }
@@ -1646,52 +1997,50 @@ static void poll_printer_files()
     
     for (int i = 0; i < printer_count; i++) {
         printer_config_t printer = cfg->get_printer(i);
-        std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+        std::string filepath = gui_get_printer_file_path(printer.serial);
         ESP_LOGI(TAG, "Checking printer %d: %s (file: %s)", i, printer.serial.c_str(), filepath.c_str());
         
-        // Use stat to get file metadata instead of opening
-        struct stat file_stat;
-        if (stat(filepath.c_str(), &file_stat) != 0) {
-            ESP_LOGI(TAG, "File not found or inaccessible: %s (errno=%d: %s)", 
-                     filepath.c_str(), errno, strerror(errno));
-            continue;
-        }
-        
-        // Check file size from stat
-        if (file_stat.st_size <= 0) {
-            ESP_LOGD(TAG, "File %s is empty (size=%ld), skipping", filepath.c_str(), (long)file_stat.st_size);
-            continue;
-        }
-        
-        if (file_stat.st_size > 20480) {
-            ESP_LOGW(TAG, "File %s too large: %ld bytes", filepath.c_str(), (long)file_stat.st_size);
-            continue;
-        }
-        
-        ESP_LOGI(TAG, "File size: %ld bytes, mtime: %ld", (long)file_stat.st_size, (long)file_stat.st_mtime);
-        
-        // Now open and read the file
+        // Open file directly - SPIFFS stat() doesn't reliably return file size
         FILE *f = fopen(filepath.c_str(), "r");
         if (!f) {
-            ESP_LOGW(TAG, "Failed to open file: %s", filepath.c_str());
+            ESP_LOGI(TAG, "File not found: %s (errno=%d)", filepath.c_str(), errno);
             continue;
         }
         
-        char *json_buf = (char*)malloc(file_stat.st_size + 1);
-        if (!json_buf) {
-            ESP_LOGW(TAG, "Failed to allocate %ld bytes for JSON", (long)file_stat.st_size);
+        // Get file size using fseek/ftell (more reliable than stat on SPIFFS)
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        
+        ESP_LOGI(TAG, "File %s size: %ld bytes", filepath.c_str(), fsize);
+        
+        if (fsize <= 0) {
+            ESP_LOGI(TAG, "File %s is empty (size=%ld), skipping", filepath.c_str(), fsize);
             fclose(f);
             continue;
         }
         
-        size_t read_size = fread(json_buf, 1, file_stat.st_size, f);
+        if (fsize > 20480) {
+            ESP_LOGW(TAG, "File %s too large: %ld bytes", filepath.c_str(), fsize);
+            fclose(f);
+            continue;
+        }
+        
+        char *json_buf = (char*)malloc(fsize + 1);
+        if (!json_buf) {
+            ESP_LOGW(TAG, "Failed to allocate %ld bytes for JSON", fsize);
+            fclose(f);
+            continue;
+        }
+        
+        size_t read_size = fread(json_buf, 1, fsize, f);
         fclose(f);
         
-        if (read_size != (size_t)file_stat.st_size) {
-            ESP_LOGW(TAG, "Read size mismatch: expected %ld, got %zu", (long)file_stat.st_size, read_size);
+        if (read_size == 0) {
+            ESP_LOGW(TAG, "Failed to read file: %s", filepath.c_str());
             free(json_buf);
             continue;
-        };
+        }
         json_buf[read_size] = '\0';
         
         cJSON *root = cJSON_Parse(json_buf);
@@ -1754,24 +2103,30 @@ static void poll_printer_files()
         
         if (!found) continue;
         
-        std::string filepath = "/spiffs/printer/" + printer.serial + ".json";
+        std::string filepath = gui_get_printer_file_path(printer.serial);
+        ESP_LOGI(TAG, "Updating slide for printer: %s, file: %s", printer.name.c_str(), filepath.c_str());
+        
         FILE *f = fopen(filepath.c_str(), "r");
         if (!f) {
-            ESP_LOGD(TAG, "Printer file not found: %s", filepath.c_str());
+            ESP_LOGW(TAG, "Printer file not found: %s (errno=%d: %s)", filepath.c_str(), errno, strerror(errno));
             continue;
         }
 
         fseek(f, 0, SEEK_END);
         long fsize = ftell(f);
         fseek(f, 0, SEEK_SET);
+        
+        ESP_LOGI(TAG, "Printer file %s size: %ld bytes", filepath.c_str(), fsize);
 
         if (fsize <= 0 || fsize > 20480) {
+            ESP_LOGW(TAG, "Invalid file size: %ld (expected 1-20480)", fsize);
             fclose(f);
             continue;
         }
 
         char *json_buf = (char*)malloc(fsize + 1);
         if (!json_buf) {
+            ESP_LOGE(TAG, "Failed to allocate %ld bytes for printer JSON", fsize);
             fclose(f);
             continue;
         }
@@ -1779,6 +2134,9 @@ static void poll_printer_files()
         size_t read_size = fread(json_buf, 1, fsize, f);
         fclose(f);
         json_buf[read_size] = '\0';
+        
+        // Log first 200 chars of JSON for debugging
+        ESP_LOGI(TAG, "Printer JSON preview (first 200 chars): %.200s%s", json_buf, read_size > 200 ? "..." : "");
 
         cJSON *root = cJSON_Parse(json_buf);
         free(json_buf);
@@ -1788,50 +2146,134 @@ static void poll_printer_files()
             continue;
         }
 
-        // Extract printer data
-        cJSON *nozzle_temp = cJSON_GetObjectItem(root, "nozzle_temper");
-        cJSON *bed_temp = cJSON_GetObjectItem(root, "bed_temper");
-        cJSON *progress = cJSON_GetObjectItem(root, "mc_percent");
-        cJSON *gcode_state = cJSON_GetObjectItem(root, "gcode_state");
+        // Extract printer data - field names match BambuMonitor cache format
+        cJSON *nozzle_temp = cJSON_GetObjectItem(root, "nozzle_temp");
+        cJSON *nozzle_target = cJSON_GetObjectItem(root, "nozzle_target");
+        cJSON *bed_temp = cJSON_GetObjectItem(root, "bed_temp");
+        cJSON *bed_target = cJSON_GetObjectItem(root, "bed_target");
+        cJSON *progress = cJSON_GetObjectItem(root, "progress");
+        cJSON *gcode_state = cJSON_GetObjectItem(root, "state");
         cJSON *last_update = cJSON_GetObjectItem(root, "last_update");
+        cJSON *remaining_min = cJSON_GetObjectItem(root, "remaining_min");
+        cJSON *current_layer = cJSON_GetObjectItem(root, "current_layer");
+        cJSON *total_layers = cJSON_GetObjectItem(root, "total_layers");
+        cJSON *file_name = cJSON_GetObjectItem(root, "file_name");
 
         int nozzle = nozzle_temp ? (int)nozzle_temp->valuedouble : 0;
+        int nozzle_tgt = nozzle_target ? (int)nozzle_target->valuedouble : 0;
         int bed = bed_temp ? (int)bed_temp->valuedouble : 0;
+        int bed_tgt = bed_target ? (int)bed_target->valuedouble : 0;
         int prog = progress ? (int)progress->valuedouble : 0;
+        int remain = remaining_min ? remaining_min->valueint : 0;
+        int layer = current_layer ? current_layer->valueint : 0;
+        int layers_total = total_layers ? total_layers->valueint : 0;
         const char *state = (gcode_state && gcode_state->valuestring) ? gcode_state->valuestring : "IDLE";
+        const char *fname = (file_name && file_name->valuestring) ? file_name->valuestring : "";
+        
+        ESP_LOGI(TAG, "Parsed printer data: nozzle=%d/%d, bed=%d/%d, progress=%d%%, layer=%d/%d, state=%s", 
+                 nozzle, nozzle_tgt, bed, bed_tgt, prog, layer, layers_total, state);
 
         // Check if printer is online
         time_t update_time = last_update ? (time_t)last_update->valuedouble : 0;
         bool is_online = (now - update_time) < ONLINE_THRESHOLD;
 
-        // Update carousel slide data
+        // Update carousel slide data with rich formatting
         static char subtitle_buf[64];
-        static char value1_buf[32];
+        static char value1_buf[48];
         static char value2_buf[64];
         static char value3_buf[64];
+        static char value4_buf[64];
 
         if (is_online) {
-            snprintf(subtitle_buf, sizeof(subtitle_buf), "Status: %s", state);
-            snprintf(value1_buf, sizeof(value1_buf), "%d%%", prog);
-            snprintf(value2_buf, sizeof(value2_buf), "Nozzle: %d°C", nozzle);
-            snprintf(value3_buf, sizeof(value3_buf), "Bed: %d°C", bed);
+            // Subtitle: Translate state to current language
+            if (strcmp(state, "RUNNING") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_RUNNING));
+            } else if (strcmp(state, "PRINTING") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_PRINTING));
+            } else if (strcmp(state, "PAUSE") == 0 || strcmp(state, "PAUSED") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_PAUSED));
+            } else if (strcmp(state, "FINISH") == 0 || strcmp(state, "FINISHED") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_FINISHED));
+            } else if (strcmp(state, "FAILED") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_FAILED));
+            } else if (strcmp(state, "ERROR") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_ERROR));
+            } else if (strcmp(state, "IDLE") == 0) {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_IDLE));
+            } else {
+                snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", state);  // Fallback to original
+            }
+            
+            // Value1: Progress percentage (large) with time remaining if printing
+            if (remain > 0 && (strcmp(state, "RUNNING") == 0 || strcmp(state, "PRINTING") == 0)) {
+                int hours = remain / 60;
+                int mins = remain % 60;
+                if (hours > 0) {
+                    snprintf(value1_buf, sizeof(value1_buf), "%d%% - %d%s %d%s", 
+                             prog, hours, TR(STR_HOURS_SHORT), mins, TR(STR_MINUTES_SHORT));
+                } else {
+                    snprintf(value1_buf, sizeof(value1_buf), "%d%% - %d%s", 
+                             prog, mins, TR(STR_MINUTES_SHORT));
+                }
+            } else {
+                snprintf(value1_buf, sizeof(value1_buf), "%d%%", prog);
+            }
+            
+            // Value2: Just nozzle temp (icon is shown separately in printer layout)
+            if (nozzle_tgt > 0) {
+                snprintf(value2_buf, sizeof(value2_buf), "%d/%d°C", nozzle, nozzle_tgt);
+            } else {
+                snprintf(value2_buf, sizeof(value2_buf), "%d°C", nozzle);
+            }
+            
+            // Value3: Bed temp + Layer progress (localized)
+            if (layers_total > 0) {
+                if (bed_tgt > 0) {
+                    snprintf(value3_buf, sizeof(value3_buf), "%s: %d/%d°C  |  %s %d/%d", 
+                             TR(STR_BED), bed, bed_tgt, TR(STR_LAYER), layer, layers_total);
+                } else {
+                    snprintf(value3_buf, sizeof(value3_buf), "%s: %d°C  |  %s %d/%d", 
+                             TR(STR_BED), bed, TR(STR_LAYER), layer, layers_total);
+                }
+            } else {
+                if (bed_tgt > 0) {
+                    snprintf(value3_buf, sizeof(value3_buf), "%s: %d/%d°C", TR(STR_BED), bed, bed_tgt);
+                } else {
+                    snprintf(value3_buf, sizeof(value3_buf), "%s: %d°C", TR(STR_BED), bed);
+                }
+            }
+            
+            // Value4: File name (truncated if needed)
+            if (fname[0] != '\0') {
+                // Remove .gcode extension if present
+                char clean_name[48];
+                strncpy(clean_name, fname, sizeof(clean_name) - 1);
+                clean_name[sizeof(clean_name) - 1] = '\0';
+                char *ext = strstr(clean_name, ".gcode");
+                if (ext) *ext = '\0';
+                snprintf(value4_buf, sizeof(value4_buf), "%.35s", clean_name);
+            } else {
+                value4_buf[0] = '\0';
+            }
         } else {
-            snprintf(subtitle_buf, sizeof(subtitle_buf), "Status: Offline");
+            snprintf(subtitle_buf, sizeof(subtitle_buf), "%s", TR(STR_OFFLINE));
             snprintf(value1_buf, sizeof(value1_buf), "--");
-            snprintf(value2_buf, sizeof(value2_buf), "Last seen %ld sec ago", (long)(now - update_time));
-            value3_buf[0] = '\0';  // Empty string
+            value2_buf[0] = '\0';
+            value3_buf[0] = '\0';
+            value4_buf[0] = '\0';
         }
 
         slide.subtitle = subtitle_buf;
         slide.value1 = value1_buf;
         slide.value2 = value2_buf;
         slide.value3 = value3_buf;
+        slide.value4 = value4_buf;
 
         // Update the actual UI labels
         carousel_widget->update_slide_labels(i);
 
-        ESP_LOGI(TAG, "Updated printer %s: %s, %d%%, nozzle=%d°C, bed=%d°C",
-                 printer.name.c_str(), state, prog, nozzle, bed);
+        ESP_LOGI(TAG, "Updated printer %s: %s, %d%%, nozzle=%d→%d°C, bed=%d→%d°C, layer=%d/%d",
+                 printer.name.c_str(), state, prog, nozzle, nozzle_tgt, bed, bed_tgt, layer, layers_total);
 
         cJSON_Delete(root);
     }

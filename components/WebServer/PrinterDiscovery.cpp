@@ -1,6 +1,6 @@
 /*
  * Printer Discovery Implementation
- * Based on bambu_project's IP scanning logic
+ * Uses mDNS for local network discovery, IP scanning for additional networks
  */
 
 #include "PrinterDiscovery.hpp"
@@ -9,6 +9,7 @@
 #include <cstring>
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -23,6 +24,7 @@
 #include <errno.h>
 #include <mqtt_client.h>
 #include <cJSON.h>
+#include <mdns.h>
 
 extern SettingsConfig *cfg;
 
@@ -177,6 +179,73 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::scan_subnet(const s
     return discovered;
 }
 
+// mDNS-based discovery for local network
+// Bambu printers advertise as _bblp._tcp (Bambu Lab Lan Protocol)
+std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover_mdns(int timeout_ms) {
+    std::vector<PrinterInfo> discovered;
+    
+    ESP_LOGI(TAG, "Starting mDNS discovery for Bambu printers (_bblp._tcp)...");
+    
+    // Query for Bambu Lab Lan Protocol service
+    mdns_result_t *results = NULL;
+    esp_err_t err = mdns_query_ptr("_bblp", "_tcp", timeout_ms, 10, &results);
+    
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS query failed: %s", esp_err_to_name(err));
+        return discovered;
+    }
+    
+    if (!results) {
+        ESP_LOGI(TAG, "mDNS: No Bambu printers found via _bblp._tcp");
+        return discovered;
+    }
+    
+    // Process results
+    mdns_result_t *r = results;
+    while (r) {
+        PrinterInfo info;
+        
+        // Get hostname
+        if (r->hostname) {
+            info.hostname = r->hostname;
+            info.model = extract_model_from_hostname(info.hostname);
+            ESP_LOGI(TAG, "mDNS found: %s (model: %s)", info.hostname.c_str(), info.model.c_str());
+        }
+        
+        // Get IP address
+        if (r->addr) {
+            mdns_ip_addr_t *addr = r->addr;
+            while (addr) {
+                if (addr->addr.type == ESP_IPADDR_TYPE_V4) {
+                    char ip_str[16];
+                    snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&addr->addr.u_addr.ip4));
+                    info.ip_address = ip_str;
+                    ESP_LOGI(TAG, "  IP: %s", info.ip_address.c_str());
+                    break;  // Use first IPv4 address
+                }
+                addr = addr->next;
+            }
+        }
+        
+        // Only add if we have both hostname and IP
+        if (!info.hostname.empty() && !info.ip_address.empty()) {
+            discovered.push_back(info);
+            
+            // Notify callback if set
+            if (s_printer_found_callback) {
+                s_printer_found_callback(info.ip_address);
+            }
+        }
+        
+        r = r->next;
+    }
+    
+    mdns_query_results_free(results);
+    
+    ESP_LOGI(TAG, "mDNS discovery complete: Found %d printer(s)", (int)discovered.size());
+    return discovered;
+}
+
 std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeout_ms, ProgressCallback progress_cb) {
     std::vector<PrinterInfo> discovered;
     
@@ -189,7 +258,19 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeou
         ESP_LOGW(TAG, "No progress callback provided");
     }
     
-    // Get configured networks from SettingsConfig
+    // Step 1: Try mDNS discovery first (fast, works on local network)
+    ESP_LOGI(TAG, "Step 1: mDNS discovery on local network...");
+    if (progress_cb) progress_cb(5, 100);
+    
+    std::vector<PrinterInfo> mdns_results = discover_mdns(2000);  // 2 second timeout
+    if (!mdns_results.empty()) {
+        ESP_LOGI(TAG, "mDNS found %d printer(s) on local network", (int)mdns_results.size());
+        discovered.insert(discovered.end(), mdns_results.begin(), mdns_results.end());
+    }
+    
+    if (progress_cb) progress_cb(15, 100);
+    
+    // Step 2: Get configured networks from SettingsConfig for IP scanning
     if (!cfg) {
         ESP_LOGE(TAG, "ERROR: cfg is NULL!");
         if (progress_cb) progress_cb(100, 100);
@@ -197,15 +278,17 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeou
     }
     
     int network_count = cfg->get_network_count();
-    ESP_LOGI(TAG, "SettingsConfig available. Network count: %d", network_count);
+    ESP_LOGI(TAG, "Step 2: IP scanning on %d configured network(s)...", network_count);
     
     if (network_count <= 0) {
-        ESP_LOGW(TAG, "No networks configured! Add networks in web UI to enable IP scanning.");
+        ESP_LOGI(TAG, "No additional networks configured for IP scanning.");
         if (progress_cb) progress_cb(100, 100);
         return discovered;
     }
     
-    ESP_LOGI(TAG, "Scanning %d configured network(s)...", network_count);
+    // Calculate progress range for IP scanning (15-100%)
+    int scan_progress_start = 15;
+    int scan_progress_range = 85;  // 100 - 15
     
     int total_networks = network_count;
     for (int i = 0; i < total_networks; i++) {
@@ -223,10 +306,10 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeou
         // Create a lambda that scales progress based on network index
         ProgressCallback network_progress_cb = nullptr;
         if (progress_cb) {
-            network_progress_cb = [progress_cb, i, total_networks](int current, int total) {
-                // Scale progress: each network gets (100/total_networks)% of the bar
-                int network_start = (i * 100) / total_networks;
-                int network_range = 100 / total_networks;
+            network_progress_cb = [progress_cb, i, total_networks, scan_progress_start, scan_progress_range](int current, int total) {
+                // Scale progress within scan range
+                int network_start = scan_progress_start + (i * scan_progress_range) / total_networks;
+                int network_range = scan_progress_range / total_networks;
                 int overall_progress = network_start + (current * network_range) / total;
                 progress_cb(overall_progress, 100);
             };
@@ -234,7 +317,20 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeou
         
         std::vector<PrinterInfo> subnet_results = scan_subnet(network.subnet, network_progress_cb);
         ESP_LOGI(TAG, "  → Scan complete: Found %d printers", (int)subnet_results.size());
-        discovered.insert(discovered.end(), subnet_results.begin(), subnet_results.end());
+        
+        // Add results, avoiding duplicates (by IP)
+        for (const auto& printer : subnet_results) {
+            bool duplicate = false;
+            for (const auto& existing : discovered) {
+                if (existing.ip_address == printer.ip_address) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                discovered.push_back(printer);
+            }
+        }
     }
     
     // Ensure progress shows 100% at the end
@@ -247,10 +343,6 @@ std::vector<PrinterDiscovery::PrinterInfo> PrinterDiscovery::discover(int timeou
     } else {
         ESP_LOGI(TAG, "=== Discovery complete: Found %d printer(s) ===", (int)discovered.size());
     }
-    
-    // Cleanup: explicitly clear vectors to release memory
-    ESP_LOGI(TAG, "Cleanup: Clearing discovery resources...");
-    // (vectors will auto-destruct when scope ends, but be explicit about it)
     
     return discovered;
 }
@@ -347,12 +439,26 @@ std::string PrinterDiscovery::extract_serial_from_topic(const std::string &topic
     return "";
 }
 
+// Structure to hold MQTT query task parameters and results
+struct mqtt_query_params {
+    std::string ip;
+    std::string access_code;
+    int timeout_ms;
+    PrinterDiscovery::PrinterStatus result;
+    SemaphoreHandle_t done_semaphore;
+    bool task_complete;
+};
+
 // Structure to hold MQTT message data
 struct mqtt_message_data {
     std::string topic;
     std::string payload;
-    bool received = false;
-    SemaphoreHandle_t semaphore;
+    bool received;
+    bool connected;
+    SemaphoreHandle_t msg_semaphore;      // Signaled when message received
+    SemaphoreHandle_t connect_semaphore;  // Signaled when connected
+    
+    mqtt_message_data() : received(false), connected(false), msg_semaphore(nullptr), connect_semaphore(nullptr) {}
 };
 
 static const char *MQTT_TAG = "MQTT_Query";
@@ -364,31 +470,227 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGD(MQTT_TAG, "MQTT connected");
+            ESP_LOGI(MQTT_TAG, "✓ MQTT connected to printer!");
+            msg_data->connected = true;
+            if (msg_data->connect_semaphore) {
+                xSemaphoreGive(msg_data->connect_semaphore);
+            }
             break;
             
         case MQTT_EVENT_DATA:
-            if (event->topic_len > 0 && event->data_len > 0) {
+            if (event->topic_len > 0 && !msg_data->received) {
                 msg_data->topic.assign(event->topic, event->topic_len);
-                msg_data->payload.assign(event->data, event->data_len);
+                if (event->data_len > 0) {
+                    msg_data->payload.assign(event->data, event->data_len);
+                }
                 msg_data->received = true;
-                if (msg_data->semaphore) {
-                    xSemaphoreGive(msg_data->semaphore);
+                ESP_LOGI(MQTT_TAG, "✓ Got message on topic: %.*s", event->topic_len, event->topic);
+                if (msg_data->msg_semaphore) {
+                    xSemaphoreGive(msg_data->msg_semaphore);
                 }
             }
             break;
             
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGD(MQTT_TAG, "MQTT disconnected");
+            ESP_LOGW(MQTT_TAG, "MQTT disconnected");
             break;
             
         case MQTT_EVENT_ERROR:
-            ESP_LOGW(MQTT_TAG, "MQTT error");
+            ESP_LOGE(MQTT_TAG, "MQTT error occurred");
+            if (event->error_handle) {
+                if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                    ESP_LOGE(MQTT_TAG, "Transport error: 0x%x", event->error_handle->esp_transport_sock_errno);
+                    // Check for TLS errors
+                    if (event->error_handle->esp_tls_last_esp_err) {
+                        ESP_LOGE(MQTT_TAG, "TLS error: 0x%x", event->error_handle->esp_tls_last_esp_err);
+                    }
+                    if (event->error_handle->esp_tls_stack_err) {
+                        ESP_LOGE(MQTT_TAG, "TLS stack error: 0x%x (may indicate wrong access code)", event->error_handle->esp_tls_stack_err);
+                    }
+                } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                    ESP_LOGE(MQTT_TAG, "Connection refused, code: 0x%x", event->error_handle->connect_return_code);
+                    // MQTT connection refused codes:
+                    // 0x04 = Bad username or password (wrong access code)
+                    // 0x05 = Not authorized
+                    if (event->error_handle->connect_return_code == 0x04 || 
+                        event->error_handle->connect_return_code == 0x05) {
+                        ESP_LOGE(MQTT_TAG, "*** WRONG ACCESS CODE - check printer LAN access code ***");
+                    }
+                }
+            }
             break;
             
         default:
+            ESP_LOGD(MQTT_TAG, "MQTT event: %d", (int)event->event_id);
             break;
     }
+}
+
+// Task function that runs the MQTT query with adequate stack for mbedTLS
+static void mqtt_query_task(void *pvParameters) {
+    mqtt_query_params *params = (mqtt_query_params *)pvParameters;
+    
+    ESP_LOGI(MQTT_TAG, "MQTT query task started for %s", params->ip.c_str());
+    
+    params->result.ip_address = params->ip;
+    
+    // Setup MQTT message data with semaphores for waiting
+    mqtt_message_data msg_data;
+    msg_data.msg_semaphore = xSemaphoreCreateBinary();
+    msg_data.connect_semaphore = xSemaphoreCreateBinary();
+    
+    if (!msg_data.msg_semaphore || !msg_data.connect_semaphore) {
+        ESP_LOGE(MQTT_TAG, "Failed to create semaphores");
+        if (msg_data.msg_semaphore) vSemaphoreDelete(msg_data.msg_semaphore);
+        if (msg_data.connect_semaphore) vSemaphoreDelete(msg_data.connect_semaphore);
+        params->result.state = "ERROR";
+        params->task_complete = true;
+        xSemaphoreGive(params->done_semaphore);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    // Check available heap before creating MQTT client
+    size_t free_heap = esp_get_free_heap_size();
+    ESP_LOGI(MQTT_TAG, "Free heap before MQTT client: %zu bytes", free_heap);
+    
+    if (free_heap < 50000) {
+        ESP_LOGW(MQTT_TAG, "Low memory (%zu bytes), skipping MQTT query", free_heap);
+        vSemaphoreDelete(msg_data.msg_semaphore);
+        if (msg_data.connect_semaphore) vSemaphoreDelete(msg_data.connect_semaphore);
+        params->result.state = "LOW_MEMORY";
+        params->task_complete = true;
+        xSemaphoreGive(params->done_semaphore);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    // Configure MQTT client with SSL skip verification
+    esp_mqtt_client_config_t mqtt_cfg = {};
+    mqtt_cfg.broker.address.hostname = params->ip.c_str();
+    mqtt_cfg.broker.address.port = 8883;
+    mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
+    
+    // Skip certificate verification for Bambu printers
+    mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+    
+    // Client credentials - Bambu uses "bblp" username and access code as password
+    mqtt_cfg.credentials.client_id = "esp32_discovery";
+    mqtt_cfg.credentials.username = "bblp";
+    mqtt_cfg.credentials.authentication.password = params->access_code.c_str();
+    
+    // Bambu printers send large JSON payloads (5-10KB), need adequate buffer
+    // Use smaller buffer for discovery since we don't need full status
+    mqtt_cfg.buffer.size = 8192;  // 8KB receive buffer (reduced from 16KB)
+    mqtt_cfg.buffer.out_size = 256;  // Smaller output buffer
+    mqtt_cfg.network.timeout_ms = params->timeout_ms;
+    mqtt_cfg.session.keepalive = 30;
+    
+    // Smaller stack for discovery task (BambuMonitor already has main MQTT)
+    mqtt_cfg.task.stack_size = 6144;  // 6KB stack (reduced from 8KB)
+    mqtt_cfg.task.priority = 4;  // Lower priority than main MQTT task
+    
+    ESP_LOGI(MQTT_TAG, "Creating MQTT client for %s...", params->ip.c_str());
+    
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    if (!client) {
+        ESP_LOGE(MQTT_TAG, "Failed to create MQTT client");
+        vSemaphoreDelete(msg_data.msg_semaphore);
+        vSemaphoreDelete(msg_data.connect_semaphore);
+        params->result.state = "ERROR";
+        params->task_complete = true;
+        xSemaphoreGive(params->done_semaphore);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    // Register event handler
+    esp_mqtt_client_register_event(client, MQTT_EVENT_ANY, mqtt_event_handler, &msg_data);
+    
+    // Start MQTT client
+    esp_err_t err = esp_mqtt_client_start(client);
+    if (err != ESP_OK) {
+        ESP_LOGE(MQTT_TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
+        esp_mqtt_client_destroy(client);
+        vSemaphoreDelete(msg_data.msg_semaphore);
+        vSemaphoreDelete(msg_data.connect_semaphore);
+        params->result.state = "ERROR";
+        params->task_complete = true;
+        xSemaphoreGive(params->done_semaphore);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    ESP_LOGI(MQTT_TAG, "MQTT client started, waiting for connection...");
+    
+    // Wait for MQTT_EVENT_CONNECTED (up to 8 seconds for SSL handshake)
+    if (xSemaphoreTake(msg_data.connect_semaphore, pdMS_TO_TICKS(8000)) != pdTRUE) {
+        ESP_LOGE(MQTT_TAG, "Timeout waiting for MQTT connection");
+        esp_mqtt_client_stop(client);
+        esp_mqtt_client_destroy(client);
+        vSemaphoreDelete(msg_data.msg_semaphore);
+        vSemaphoreDelete(msg_data.connect_semaphore);
+        params->result.state = "CONNECT_TIMEOUT";
+        params->task_complete = true;
+        xSemaphoreGive(params->done_semaphore);
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    ESP_LOGI(MQTT_TAG, "Connected! Now subscribing...");
+    
+    // Subscribe to wildcard topic to discover serial number
+    // Bambu printers publish reports on device/{SERIAL}/report
+    int msg_id = esp_mqtt_client_subscribe(client, "device/+/report", 0);
+    ESP_LOGI(MQTT_TAG, "Subscribed to device/+/report (msg_id: %d)", msg_id);
+    
+    // Give the subscription time to be processed
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Send push_all request to trigger printer to send status
+    // This is required on newer firmware - printers don't auto-send without request
+    // The request goes to device/{serial}/request but we use a generic approach
+    const char* push_all_cmd = "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}";
+    
+    // Try to publish to a wildcard-ish topic (some printers accept this)
+    // If we don't know the serial yet, try publishing to request topic
+    int pub_id = esp_mqtt_client_publish(client, "device/local/request", push_all_cmd, 0, 0, 0);
+    if (pub_id >= 0) {
+        ESP_LOGI(MQTT_TAG, "Sent push_all request (msg_id: %d)", pub_id);
+    }
+    
+    // Bambu printers should respond within a few seconds
+    ESP_LOGI(MQTT_TAG, "Waiting for printer status report (timeout: %d ms)...", params->timeout_ms);
+    
+    if (xSemaphoreTake(msg_data.msg_semaphore, pdMS_TO_TICKS(params->timeout_ms)) == pdTRUE) {
+        ESP_LOGI(MQTT_TAG, "Received MQTT message on topic: %s", msg_data.topic.c_str());
+        
+        // Extract serial from topic
+        std::string serial = PrinterDiscovery::extract_serial_from_topic(msg_data.topic);
+        if (!serial.empty()) {
+            params->result.serial = serial;
+            params->result.state = "READY";
+            ESP_LOGI(MQTT_TAG, "✓ Discovered printer serial: %s", serial.c_str());
+        } else {
+            ESP_LOGW(MQTT_TAG, "Could not extract serial from topic: %s", msg_data.topic.c_str());
+            params->result.state = "UNKNOWN";
+        }
+    } else {
+        ESP_LOGW(MQTT_TAG, "Timeout waiting for printer response");
+        params->result.state = "TIMEOUT";
+    }
+    
+    // Cleanup
+    esp_mqtt_client_stop(client);
+    esp_mqtt_client_destroy(client);
+    vSemaphoreDelete(msg_data.msg_semaphore);
+    vSemaphoreDelete(msg_data.connect_semaphore);
+    
+    params->task_complete = true;
+    xSemaphoreGive(params->done_semaphore);
+    
+    ESP_LOGI(MQTT_TAG, "MQTT query task complete");
+    vTaskDelete(NULL);
 }
 
 PrinterDiscovery::PrinterStatus PrinterDiscovery::query_printer_status(const std::string &ip, const std::string &access_code, int timeout_ms) {
@@ -397,19 +699,58 @@ PrinterDiscovery::PrinterStatus PrinterDiscovery::query_printer_status(const std
     
     ESP_LOGI(TAG, "Starting MQTT query for printer at %s with timeout %d ms", ip.c_str(), timeout_ms);
     
-    // Verify connection first
+    // Verify connection first (quick TCP check)
     if (!test_connection(ip, 8883, 500)) {
         ESP_LOGE(TAG, "Printer not reachable at %s:8883", ip.c_str());
+        status.state = "OFFLINE";
         return status;
     }
     
     ESP_LOGI(TAG, "✓ Printer reachable at %s:8883", ip.c_str());
     
-    // TODO: Implement SSL bypass MQTT discovery
-    // For now, return placeholder - user can manually enter serial number
-    ESP_LOGI(TAG, "MQTT discovery not implemented - user can enter serial manually");
-    status.state = "READY";
-    status.serial = "CERT_REQUIRED";
+    // Create parameters structure for the task
+    mqtt_query_params params;
+    params.ip = ip;
+    params.access_code = access_code;
+    params.timeout_ms = timeout_ms;
+    params.task_complete = false;
+    params.done_semaphore = xSemaphoreCreateBinary();
+    
+    if (!params.done_semaphore) {
+        ESP_LOGE(TAG, "Failed to create done semaphore");
+        status.state = "ERROR";
+        return status;
+    }
+    
+    // Create task with large stack for mbedTLS SSL operations (12KB)
+    // The httpd task only has 4KB which is not enough for SSL handshake
+    BaseType_t task_created = xTaskCreate(
+        mqtt_query_task,
+        "mqtt_query",
+        12288,  // 12KB stack - mbedTLS needs ~8KB for SSL handshake
+        &params,
+        5,      // Priority
+        NULL
+    );
+    
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create MQTT query task");
+        vSemaphoreDelete(params.done_semaphore);
+        status.state = "ERROR";
+        return status;
+    }
+    
+    // Wait for task to complete with overall timeout (connection + query + buffer)
+    int total_timeout = timeout_ms + 5000;  // Add 5s for SSL handshake overhead
+    if (xSemaphoreTake(params.done_semaphore, pdMS_TO_TICKS(total_timeout)) == pdTRUE) {
+        status = params.result;
+        ESP_LOGI(TAG, "MQTT query completed with state: %s", status.state.c_str());
+    } else {
+        ESP_LOGW(TAG, "MQTT query task timed out");
+        status.state = "TIMEOUT";
+    }
+    
+    vSemaphoreDelete(params.done_semaphore);
     
     return status;
 }

@@ -60,9 +60,36 @@ extern "C" {
 #define MSG_BAMBU_STATUS        200
 #define MSG_BAMBU_PROGRESS      201
 #define MSG_BAMBU_TEMPS         202
+#define MSG_BAMBU_LAYER         203
+#define MSG_BAMBU_REMAINING     204
+#define MSG_BAMBU_FANS          205
+#define MSG_BAMBU_AMS           206
+#define MSG_BAMBU_FULL_UPDATE   207  // Complete printer data update
+
+// Bambu printer status data structure (passed with MSG_BAMBU_FULL_UPDATE)
+typedef struct {
+    char state[16];           // RUNNING, IDLE, PAUSE, FINISH, etc.
+    uint8_t progress;         // 0-100%
+    int remaining_min;        // Minutes remaining
+    int current_layer;        // Current layer number
+    int total_layers;         // Total layers
+    float nozzle_temp;        // Current nozzle temperature
+    float nozzle_target;      // Target nozzle temperature
+    float bed_temp;           // Current bed temperature
+    float bed_target;         // Target bed temperature
+    uint8_t part_fan;         // Part cooling fan 0-15
+    uint8_t aux_fan;          // Aux fan 0-15
+    char file_name[64];       // Current print file name
+    char subtask_name[64];    // Print settings description
+    int wifi_signal;          // WiFi signal strength in dBm
+    char printer_name[32];    // Printer name from config
+} bambu_printer_data_t;
 
 // Printer configuration
 #define MSG_PRINTER_CONFIG      250
+
+// Config changed (locations/printers added/removed via web UI)
+#define MSG_CONFIG_CHANGED      260
 
 #define MSG_PAGE_BAMBU          4
 

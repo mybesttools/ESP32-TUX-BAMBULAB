@@ -12,7 +12,9 @@ idf_component_register(SRCS "main.cpp"
 					# "fonts/font_fa_weather_56.c"
 					# "fonts/font_fa_weather_64.c"
 
-					# Mototype font used in device info
+					# Printer status icons (play, pause, stop, temps, etc)
+                                     "fonts/font_fa_printer_42.c"
+                                     "fonts/font_fa_printer_24.c"					# Mototype font used in device info
 					# "fonts/font_robotomono_12.c"
 					"fonts/font_robotomono_13.c"
 
@@ -21,6 +23,12 @@ idf_component_register(SRCS "main.cpp"
 					# "fonts/font_7seg_60.c"
 					# "fonts/font_7seg_58.c"
 					"fonts/font_7seg_56.c"
+
+					# Montserrat fonts with Polish characters
+					"fonts/font_montserrat_pl_14.c"
+					"fonts/font_montserrat_pl_16.c"
+					"fonts/font_montserrat_pl_24.c"
+					"fonts/font_montserrat_pl_32.c"
 
                 INCLUDE_DIRS "." "devices" "helpers" "pages" "widgets" "images"
 				REQUIRES json LovyanGFX lvgl fatfs fmt SettingsConfig OpenWeatherMap spi_flash

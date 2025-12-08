@@ -109,6 +109,7 @@ class SettingsConfig
         string WeatherProvider;     // OpenWeatherMap
         string WeatherLocation;            // Bangalore, India
         string WeatherAPIkey;              // "ABCD..."
+        string Language;                   // UI language code (en, de, nl, pl, ru)
         uint WeatherUpdateInterval;        // in seconds
         weather_units_t TemperatureUnits;
 
