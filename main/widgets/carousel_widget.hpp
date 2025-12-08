@@ -180,28 +180,28 @@ void CarouselWidget::add_slide(const carousel_slide_t &slide)
     // Title
     lv_obj_t *title = lv_label_create(slide_panel);
     lv_label_set_text(title, slide.title.c_str());
-    lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
+    lv_obj_set_style_text_font(title, &font_montserrat_int_24, 0);
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
     lv_obj_set_pos(title, 20, 20);
     
     // Subtitle
     lv_obj_t *subtitle = lv_label_create(slide_panel);
     lv_label_set_text(subtitle, slide.subtitle.c_str());
-    lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
+    lv_obj_set_style_text_font(subtitle, &font_montserrat_int_16, 0);
     lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
     lv_obj_set_pos(subtitle, 20, 50);
     
     // Main value (temperature, progress, etc.)
     lv_obj_t *value1 = lv_label_create(slide_panel);
     lv_label_set_text(value1, slide.value1.c_str());
-    lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
+    lv_obj_set_style_text_font(value1, &font_montserrat_int_32, 0);
     lv_obj_set_style_text_color(value1, lv_color_hex(0xffa500), 0);
     lv_obj_align(value1, LV_ALIGN_CENTER, 0, -30);
     
     // Secondary value (description)
     lv_obj_t *value2 = lv_label_create(slide_panel);
     lv_label_set_text(value2, slide.value2.c_str());
-    lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
+    lv_obj_set_style_text_font(value2, &font_montserrat_int_16, 0);
     lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
     lv_obj_align(value2, LV_ALIGN_CENTER, 0, 40);
     
@@ -245,21 +245,21 @@ void CarouselWidget::update_slides()
             // Child 0: Title (Printer name)
             lv_obj_t *title = lv_label_create(slide_panel);
             lv_label_set_text(title, slide.title.c_str());
-            lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
+            lv_obj_set_style_text_font(title, &font_montserrat_int_24, 0);
             lv_obj_set_style_text_color(title, lv_color_white(), 0);
             lv_obj_set_pos(title, 10, 5);
             
             // Child 1: Subtitle (State + time remaining)
             lv_obj_t *subtitle = lv_label_create(slide_panel);
             lv_label_set_text(subtitle, slide.subtitle.c_str());
-            lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(subtitle, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
             lv_obj_set_pos(subtitle, 10, 38);
             
             // Child 2: Progress (large)
             lv_obj_t *value1 = lv_label_create(slide_panel);
             lv_label_set_text(value1, slide.value1.c_str());
-            lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
+            lv_obj_set_style_text_font(value1, &font_montserrat_int_32, 0);
             lv_obj_set_style_text_color(value1, lv_color_hex(0x00cc00), 0);  // Green for progress
             lv_obj_set_pos(value1, 10, 62);
             
@@ -273,7 +273,7 @@ void CarouselWidget::update_slides()
             // Child 4: Nozzle temperature text (value2)
             lv_obj_t *value2 = lv_label_create(slide_panel);
             lv_label_set_text(value2, slide.value2.c_str());
-            lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value2, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
             lv_obj_set_pos(value2, 55, 115);
             
@@ -287,14 +287,14 @@ void CarouselWidget::update_slides()
             // Child 6: Bed temp + Layer progress (value3)
             lv_obj_t *value3 = lv_label_create(slide_panel);
             lv_label_set_text(value3, slide.value3.empty() ? "" : slide.value3.c_str());
-            lv_obj_set_style_text_font(value3, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value3, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value3, lv_color_hex(0x88ccff), 0);
             lv_obj_set_pos(value3, 10, 155);
             
             // Child 7: File name (value4)
             lv_obj_t *value4 = lv_label_create(slide_panel);
             lv_label_set_text(value4, slide.value4.empty() ? "" : slide.value4.c_str());
-            lv_obj_set_style_text_font(value4, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value4, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value4, lv_color_hex(0x888888), 0);
             lv_obj_set_pos(value4, 10, 180);
             
@@ -310,42 +310,42 @@ void CarouselWidget::update_slides()
             // Title (Location)
             lv_obj_t *title = lv_label_create(slide_panel);
             lv_label_set_text(title, slide.title.c_str());
-            lv_obj_set_style_text_font(title, &font_montserrat_pl_24, 0);
+            lv_obj_set_style_text_font(title, &font_montserrat_int_24, 0);
             lv_obj_set_style_text_color(title, lv_color_white(), 0);
             lv_obj_set_pos(title, 10, 10);
             
             // Subtitle (Time, Date, Location details)
             lv_obj_t *subtitle = lv_label_create(slide_panel);
             lv_label_set_text(subtitle, slide.subtitle.c_str());
-            lv_obj_set_style_text_font(subtitle, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(subtitle, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(subtitle, lv_color_hex(0xaaaaaa), 0);
             lv_obj_set_pos(subtitle, 10, 45);
             
             // Main value (Current temperature)
             lv_obj_t *value1 = lv_label_create(slide_panel);
             lv_label_set_text(value1, slide.value1.c_str());
-            lv_obj_set_style_text_font(value1, &font_montserrat_pl_32, 0);
+            lv_obj_set_style_text_font(value1, &font_montserrat_int_32, 0);
             lv_obj_set_style_text_color(value1, lv_color_hex(0xffa500), 0);
             lv_obj_set_pos(value1, 10, 70);
             
             // Secondary value (Weather description)
             lv_obj_t *value2 = lv_label_create(slide_panel);
             lv_label_set_text(value2, slide.value2.c_str());
-            lv_obj_set_style_text_font(value2, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value2, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value2, lv_color_hex(0xcccccc), 0);
             lv_obj_set_pos(value2, 10, 115);
             
             // Value 3 (Temp range, humidity)
             lv_obj_t *value3 = lv_label_create(slide_panel);
             lv_label_set_text(value3, slide.value3.empty() ? "" : slide.value3.c_str());
-            lv_obj_set_style_text_font(value3, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value3, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value3, lv_color_hex(0x88ccff), 0);
             lv_obj_set_pos(value3, 10, 145);
             
             // Value 4 (Wind, pressure)
             lv_obj_t *value4 = lv_label_create(slide_panel);
             lv_label_set_text(value4, slide.value4.empty() ? "" : slide.value4.c_str());
-            lv_obj_set_style_text_font(value4, &font_montserrat_pl_16, 0);
+            lv_obj_set_style_text_font(value4, &font_montserrat_int_16, 0);
             lv_obj_set_style_text_color(value4, lv_color_hex(0x88ccff), 0);
             lv_obj_set_pos(value4, 10, 175);
             

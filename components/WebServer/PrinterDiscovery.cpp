@@ -573,21 +573,23 @@ static void mqtt_query_task(void *pvParameters) {
     
     // Skip certificate verification for Bambu printers
     mqtt_cfg.broker.verification.skip_cert_common_name_check = true;
+    mqtt_cfg.broker.verification.use_global_ca_store = false;
+    mqtt_cfg.broker.verification.crt_bundle_attach = NULL;
     
     // Client credentials - Bambu uses "bblp" username and access code as password
     mqtt_cfg.credentials.client_id = "esp32_discovery";
     mqtt_cfg.credentials.username = "bblp";
     mqtt_cfg.credentials.authentication.password = params->access_code.c_str();
     
-    // Bambu printers send large JSON payloads (5-10KB), need adequate buffer
-    // Use smaller buffer for discovery since we don't need full status
-    mqtt_cfg.buffer.size = 8192;  // 8KB receive buffer (reduced from 16KB)
-    mqtt_cfg.buffer.out_size = 256;  // Smaller output buffer
+    // Minimal buffers for discovery - we only need the serial number from topic
+    mqtt_cfg.buffer.size = 4096;  // 4KB receive buffer (reduced from 8KB)
+    mqtt_cfg.buffer.out_size = 256;  // 256B output buffer
     mqtt_cfg.network.timeout_ms = params->timeout_ms;
-    mqtt_cfg.session.keepalive = 30;
+    mqtt_cfg.network.disable_auto_reconnect = true;  // Don't auto-reconnect for discovery
+    mqtt_cfg.session.keepalive = 15;  // Shorter keepalive for discovery
     
-    // Smaller stack for discovery task (BambuMonitor already has main MQTT)
-    mqtt_cfg.task.stack_size = 6144;  // 6KB stack (reduced from 8KB)
+    // Minimal stack for discovery task
+    mqtt_cfg.task.stack_size = 4096;  // 4KB stack (reduced from 6KB)
     mqtt_cfg.task.priority = 4;  // Lower priority than main MQTT task
     
     ESP_LOGI(MQTT_TAG, "Creating MQTT client for %s...", params->ip.c_str());

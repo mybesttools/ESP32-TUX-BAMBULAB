@@ -37,12 +37,25 @@ static const char *TAG = "ESP32-TUX";
 
 // Async callback for config changes - runs in LVGL context safely
 static void config_changed_async_cb(void *data) {
-    ESP_LOGI(TAG, "Config changed async - updating language and sending MSG_CONFIG_CHANGED");
+    ESP_LOGI(TAG, "Config changed async - updating language, brightness, theme and sending MSG_CONFIG_CHANGED");
     // Update language from config
     if (cfg && !cfg->Language.empty()) {
         set_language_from_code(cfg->Language.c_str());
     }
+    
+    // Apply brightness from config
+    if (cfg) {
+        lcd.setBrightness(cfg->Brightness);
+        ESP_LOGI(TAG, "Applied brightness from config: %d", cfg->Brightness);
+    }
+    
     lv_msg_send(MSG_CONFIG_CHANGED, NULL);
+    
+    // Trigger immediate weather refresh to get descriptions in new language
+    if (owm && timer_weather) {
+        ESP_LOGI(TAG, "Language changed - triggering weather refresh");
+        lv_timer_ready(timer_weather);
+    }
 }
 
 // Get the printer storage path (SD card if available, else SPIFFS)
@@ -350,6 +363,38 @@ static void bambu_monitor_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief Storage health monitoring task
+ * Periodically checks SD card and SPIFFS health, attempts auto-repair if issues detected
+ */
+/**
+ * @brief Storage health monitoring task
+ * Periodically checks SD card and SPIFFS health, logs error counts
+ */
+static void storage_health_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "Storage health monitor task started");
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    
+    while (1) {
+        // Check health every 60 seconds
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(60000));
+        
+        // Run health check and log status
+        storage_health_check();
+        
+        // Get status for logging
+        storage_health_t status;
+        storage_health_get_status(&status);
+        if (status.sd_errors > 0 || status.spiffs_errors > 0) {
+            ESP_LOGW(TAG, "Storage errors detected - SD: %lu, SPIFFS: %lu", 
+                     (unsigned long)status.sd_errors, (unsigned long)status.spiffs_errors);
+        }
+    }
+    
+    vTaskDelete(NULL);
+}
+
 extern "C" void app_main(void)
 {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);      // enable DEBUG logs for this App
@@ -527,6 +572,18 @@ extern "C" void app_main(void)
         NULL,
         0  // Core 0
     );
+    
+    // Start Storage Health Monitor task
+    xTaskCreatePinnedToCore(
+        storage_health_task,
+        "storage_health",
+        1024 * 3,
+        NULL,
+        1,  // Lower priority than bambu_monitor
+        NULL,
+        0  // Core 0
+    );
+    ESP_LOGI(TAG, "Storage health monitor started (60s interval)");
 }
 
 static void timer_datetime_callback(lv_timer_t * timer)

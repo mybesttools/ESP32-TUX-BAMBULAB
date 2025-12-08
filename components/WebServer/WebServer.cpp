@@ -19,7 +19,7 @@ Copyright (c) 2024 ESP32-TUX Contributors
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "events/tux_events.hpp"
+#include "tux_events.hpp"
 
 static const char *TAG = "WebServer";
 
@@ -68,18 +68,18 @@ static const char *HTML_PAGE = R"rawliteral(
         
         <!-- Settings Panel -->
         <div class="panel">
-            <h2>⚙️ System Settings</h2>
-            <label>Brightness:</label>
+            <h2 data-i18n="systemSettings">⚙️ System Settings</h2>
+            <label data-i18n="brightness">Brightness:</label>
             <input type="range" id="brightness" min="50" max="255" value="128">
             <span id="brightnessVal">128</span>
             
-            <label>Theme:</label>
+            <label data-i18n="theme">Theme:</label>
             <select id="theme">
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
             </select>
             
-            <label>Timezone:</label>
+            <label data-i18n="timezone">Timezone:</label>
             <select id="timezone">
                 <option value="" disabled selected hidden>-- Select Timezone --</option>
                 <option value="UTC0">UTC (GMT)</option>
@@ -113,73 +113,80 @@ static const char *HTML_PAGE = R"rawliteral(
                 </optgroup>
             </select>
             
-            <input type="hidden" id="language" value="pl">
+            <label data-i18n="language">Language:</label>
+            <select id="language">
+                <option value="en" selected>English</option>
+                <option value="de">Deutsch (German)</option>
+                <option value="nl">Nederlands (Dutch)</option>
+                <option value="pl">Polski (Polish)</option>
+                <option value="ru">Русский (Russian - requires font update)</option>
+            </select>
             
             <div class="button-group">
-                <button onclick="saveSettings()">💾 Save Settings</button>
-                <button onclick="loadSettings()">🔄 Load Settings</button>
+                <button onclick="saveSettings()" data-i18n="saveSettings">💾 Save Settings</button>
+                <button onclick="loadSettings()" data-i18n="loadSettings">🔄 Load Settings</button>
             </div>
             <div id="settingsStatus"></div>
         </div>
         
         <!-- Weather Panel -->
         <div class="panel">
-            <h2>🌤️ Weather Settings</h2>
+            <h2 data-i18n="weatherSettings">🌤️ Weather Settings</h2>
             <form onsubmit="return false;">
-            <label>API Key:</label>
-            <input type="password" id="apiKey" placeholder="Enter OpenWeatherMap API key">
+            <label data-i18n="apiKey">API Key:</label>
+            <input type="password" id="apiKey" data-i18n="apiKeyPlaceholder" placeholder="Enter OpenWeatherMap API key">
             </form>
             
             <div class="button-group">
-                <button onclick="saveWeatherSettings()">💾 Save Weather Settings</button>
-                <button onclick="loadWeatherSettings()">🔄 Load Weather Settings</button>
+                <button onclick="saveWeatherSettings()" data-i18n="saveWeatherSettings">💾 Save Weather Settings</button>
+                <button onclick="loadWeatherSettings()" data-i18n="loadWeatherSettings">🔄 Load Weather Settings</button>
             </div>
             <div id="weatherStatus"></div>
         </div>
         
         <!-- Weather Locations Panel -->
         <div class="panel">
-            <h2>📍 Manage Weather Locations</h2>
+            <h2 data-i18n="manageWeatherLocations">📍 Manage Weather Locations</h2>
             
-            <h3>Add Location</h3>
-            <label>Location Name:</label>
-            <input type="text" id="locationName" placeholder="e.g., Home, Office">
+            <h3 data-i18n="addLocation">Add Location</h3>
+            <label data-i18n="locationName">Location Name:</label>
+            <input type="text" id="locationName" data-i18n="locationNamePlaceholder" placeholder="e.g., Home, Office">
             
-            <label>City:</label>
-            <input type="text" id="locationCity" placeholder="e.g., Kleve">
+            <label data-i18n="city">City:</label>
+            <input type="text" id="locationCity" data-i18n="cityPlaceholder" placeholder="e.g., Kleve">
             
-            <label>Country:</label>
-            <input type="text" id="locationCountry" placeholder="e.g., Germany">
+            <label data-i18n="country">Country:</label>
+            <input type="text" id="locationCountry" data-i18n="countryPlaceholder" placeholder="e.g., Germany">
             
-            <label>Latitude:</label>
+            <label data-i18n="latitude">Latitude:</label>
             <input type="number" id="locationLat" placeholder="51.7934" step="0.0001">
             
-            <label>Longitude:</label>
+            <label data-i18n="longitude">Longitude:</label>
             <input type="number" id="locationLon" placeholder="6.1368" step="0.0001">
             
             <div class="button-group">
-                <button onclick="addWeatherLocation()">➕ Add Location</button>
+                <button onclick="addWeatherLocation()" data-i18n="addLocationBtn">➕ Add Location</button>
             </div>
             
-            <h3>Configured Locations</h3>
+            <h3 data-i18n="configuredLocations">Configured Locations</h3>
             <ul class="printer-list" id="locationList"></ul>
             <div id="locationStatus"></div>
         </div>
         
         <!-- Printers Panel -->
         <div class="panel">
-            <h2>🖨️ Printer Configuration</h2>
+            <h2 data-i18n="printerConfiguration">🖨️ Printer Configuration</h2>
             
-            <h3>Auto-Discover Printers</h3>
-            <p style="font-size: 12px; color: #aaaaaa;">Searches for Bambu Lab printers on your network</p>
+            <h3 data-i18n="autoDiscover">Auto-Discover Printers</h3>
+            <p style="font-size: 12px; color: #aaaaaa;" data-i18n="autoDiscoverDesc">Searches for Bambu Lab printers on your network</p>
             <div class="button-group">
-                <button onclick="discoverPrinters()">🔍 Discover Printers</button>
+                <button onclick="discoverPrinters()" data-i18n="discoverPrintersBtn">🔍 Discover Printers</button>
             </div>
             <div id="discoverStatus"></div>
             
             <!-- Discovered printers dropdown -->
             <div id="discoveredPrinterSection" style="display:none; margin-top: 15px;">
-                <label>Select from discovered printers:</label>
+                <label data-i18n="selectDiscovered">Select from discovered printers:</label>
                 <select id="discoveredPrinterDropdown" onchange="selectDiscoveredPrinter()">
                     <option value="">-- Choose a printer --</option>
                 </select>
@@ -187,15 +194,15 @@ static const char *HTML_PAGE = R"rawliteral(
             
             <hr>
             
-            <h3>Add Printer Manually</h3>
-            <label>Printer Name:</label>
-            <input type="text" id="printerName" placeholder="e.g., Bambu Lab X1" oninput="validatePrinterForm()">
+            <h3 data-i18n="addManually">Add Printer Manually</h3>
+            <label data-i18n="printerName">Printer Name:</label>
+            <input type="text" id="printerName" data-i18n="printerNamePlaceholder" placeholder="e.g., Bambu Lab X1" oninput="validatePrinterForm()">
             
-            <label>IP Address:</label>
-            <input type="text" id="printerIP" placeholder="192.168.1.100" oninput="validatePrinterForm()">
+            <label data-i18n="ipAddress">IP Address:</label>
+            <input type="text" id="printerIP" data-i18n="ipPlaceholder" placeholder="192.168.1.100" oninput="validatePrinterForm()">
             
-            <label>Printer Code:</label>
-            <input type="password" id="printerToken" placeholder="Enter printer access code" oninput="validatePrinterForm()">
+            <label data-i18n="printerCode">Printer Code:</label>
+            <input type="password" id="printerToken" data-i18n="printerCodePlaceholder" placeholder="Enter printer access code" oninput="validatePrinterForm()">
             
             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                 <input type="checkbox" id="disableSslVerify" checked>
@@ -203,18 +210,18 @@ static const char *HTML_PAGE = R"rawliteral(
             </label>
             <p style="font-size: 11px; color: #aaa; margin: -5px 0 10px 28px;">⚠️ Disabling SSL verification is less secure but avoids certificate setup. Only use on trusted networks.</p>
             
-            <label>Serial Number:</label>
+            <label data-i18n="serialNumber">Serial Number:</label>
             <div style="display: flex; gap: 8px;">
-                <input type="text" id="printerSerial" placeholder="e.g., 0309DA541804686 (REQUIRED for A1 Mini)" style="flex: 1;">
+                <input type="text" id="printerSerial" data-i18n="serialPlaceholder" placeholder="e.g., 0309DA541804686 (REQUIRED for A1 Mini)" style="flex: 1;">
                 <button id="fetchSerialBtn" onclick="fetchPrinterSerial()" disabled>🔍 Fetch Serial</button>
             </div>
             <p style="font-size: 11px; color: #f0ad4e; margin: -5px 0 10px 0;">⚠️ A1 Mini REQUIRES serial number. Find it in Bambu app → Device → Settings → Device Info</p>
             
             <div class="button-group">
-                <button id="addPrinterBtn" onclick="addPrinter()" disabled>➕ Add Printer</button>
+                <button id="addPrinterBtn" onclick="addPrinter()" data-i18n="addPrinterBtn" disabled>➕ Add Printer</button>
             </div>
             
-            <h3>Configured Printers</h3>
+            <h3 data-i18n="configuredPrinters">Configured Printers</h3>
             <ul class="printer-list" id="printerList"></ul>
             <div id="printerStatus"></div>
         </div>
@@ -249,6 +256,362 @@ static const char *HTML_PAGE = R"rawliteral(
     </div>
 
     <script>
+        // i18n Translation System
+        const translations = {
+            en: {
+                title: 'ESP32-TUX Configuration',
+                systemSettings: 'System Settings',
+                brightness: 'Brightness',
+                theme: 'Theme',
+                themeDark: 'Dark',
+                themeLight: 'Light',
+                timezone: 'Timezone',
+                selectTimezone: '-- Select Timezone --',
+                language: 'Language',
+                saveSettings: 'Save Settings',
+                loadSettings: 'Load Settings',
+                weatherSettings: 'Weather Settings',
+                apiKey: 'API Key',
+                apiKeyPlaceholder: 'Enter OpenWeatherMap API key',
+                saveWeatherSettings: 'Save Weather Settings',
+                loadWeatherSettings: 'Load Weather Settings',
+                manageWeatherLocations: 'Manage Weather Locations',
+                addLocation: 'Add Location',
+                locationName: 'Location Name',
+                locationNamePlaceholder: 'e.g., Home, Office',
+                city: 'City',
+                cityPlaceholder: 'e.g., Kleve',
+                country: 'Country',
+                countryPlaceholder: 'e.g., Germany',
+                latitude: 'Latitude',
+                longitude: 'Longitude',
+                addLocationBtn: 'Add Location',
+                configuredLocations: 'Configured Locations',
+                printerConfiguration: 'Printer Configuration',
+                autoDiscover: 'Auto-Discover Printers',
+                autoDiscoverDesc: 'Searches for Bambu Lab printers on your network',
+                discoverPrintersBtn: 'Discover Printers',
+                selectDiscovered: 'Select from discovered printers',
+                choosePrinter: '-- Choose a printer --',
+                addManually: 'Add Printer Manually',
+                printerName: 'Printer Name',
+                printerNamePlaceholder: 'e.g., Bambu Lab X1',
+                ipAddress: 'IP Address',
+                ipPlaceholder: '192.168.1.100',
+                printerCode: 'Printer Code',
+                printerCodePlaceholder: 'Enter printer access code',
+                serialNumber: 'Serial Number',
+                serialPlaceholder: 'Enter printer serial number',
+                addPrinterBtn: 'Add Printer',
+                configuredPrinters: 'Configured Printers',
+                deleteBtn: 'Delete',
+                settingsSaved: 'Settings saved!',
+                weatherSettingsSaved: 'Weather settings saved!',
+                locationAdded: 'Location added!',
+                printerAdded: 'Printer added!',
+                error: 'Error',
+                errorLoading: 'Error loading',
+                scanning: 'Scanning',
+                starting: 'Starting',
+                noDiscoveredPrinters: 'No printers discovered',
+                discoveryComplete: 'Discovery complete'
+            },
+            de: {
+                title: 'ESP32-TUX Konfiguration',
+                systemSettings: 'Systemeinstellungen',
+                brightness: 'Helligkeit',
+                theme: 'Thema',
+                themeDark: 'Dunkel',
+                themeLight: 'Hell',
+                timezone: 'Zeitzone',
+                selectTimezone: '-- Zeitzone wählen --',
+                language: 'Sprache',
+                saveSettings: 'Einstellungen speichern',
+                loadSettings: 'Einstellungen laden',
+                weatherSettings: 'Wettereinstellungen',
+                apiKey: 'API-Schlüssel',
+                apiKeyPlaceholder: 'OpenWeatherMap API-Schlüssel eingeben',
+                saveWeatherSettings: 'Wettereinstellungen speichern',
+                loadWeatherSettings: 'Wettereinstellungen laden',
+                manageWeatherLocations: 'Wetter-Standorte verwalten',
+                addLocation: 'Standort hinzufügen',
+                locationName: 'Standortname',
+                locationNamePlaceholder: 'z.B. Zuhause, Büro',
+                city: 'Stadt',
+                cityPlaceholder: 'z.B. Kleve',
+                country: 'Land',
+                countryPlaceholder: 'z.B. Deutschland',
+                latitude: 'Breitengrad',
+                longitude: 'Längengrad',
+                addLocationBtn: 'Standort hinzufügen',
+                configuredLocations: 'Konfigurierte Standorte',
+                printerConfiguration: 'Druckerkonfiguration',
+                autoDiscover: 'Drucker automatisch erkennen',
+                autoDiscoverDesc: 'Sucht nach Bambu Lab Druckern in Ihrem Netzwerk',
+                discoverPrintersBtn: 'Drucker suchen',
+                selectDiscovered: 'Aus erkannten Druckern auswählen',
+                choosePrinter: '-- Drucker auswählen --',
+                addManually: 'Drucker manuell hinzufügen',
+                printerName: 'Druckername',
+                printerNamePlaceholder: 'z.B. Bambu Lab X1',
+                ipAddress: 'IP-Adresse',
+                ipPlaceholder: '192.168.1.100',
+                printerCode: 'Druckercode',
+                printerCodePlaceholder: 'Drucker-Zugangscode eingeben',
+                serialNumber: 'Seriennummer',
+                serialPlaceholder: 'Drucker-Seriennummer eingeben',
+                addPrinterBtn: 'Drucker hinzufügen',
+                configuredPrinters: 'Konfigurierte Drucker',
+                deleteBtn: 'Löschen',
+                settingsSaved: 'Einstellungen gespeichert!',
+                weatherSettingsSaved: 'Wettereinstellungen gespeichert!',
+                locationAdded: 'Standort hinzugefügt!',
+                printerAdded: 'Drucker hinzugefügt!',
+                error: 'Fehler',
+                errorLoading: 'Fehler beim Laden',
+                scanning: 'Scanne',
+                starting: 'Starte',
+                noDiscoveredPrinters: 'Keine Drucker gefunden',
+                discoveryComplete: 'Suche abgeschlossen'
+            },
+            nl: {
+                title: 'ESP32-TUX Configuratie',
+                systemSettings: 'Systeeminstellingen',
+                brightness: 'Helderheid',
+                theme: 'Thema',
+                themeDark: 'Donker',
+                themeLight: 'Licht',
+                timezone: 'Tijdzone',
+                selectTimezone: '-- Selecteer tijdzone --',
+                language: 'Taal',
+                saveSettings: 'Instellingen opslaan',
+                loadSettings: 'Instellingen laden',
+                weatherSettings: 'Weerinstellingen',
+                apiKey: 'API-sleutel',
+                apiKeyPlaceholder: 'Voer OpenWeatherMap API-sleutel in',
+                saveWeatherSettings: 'Weerinstellingen opslaan',
+                loadWeatherSettings: 'Weerinstellingen laden',
+                manageWeatherLocations: 'Weerlocaties beheren',
+                addLocation: 'Locatie toevoegen',
+                locationName: 'Locatienaam',
+                locationNamePlaceholder: 'bijv. Thuis, Kantoor',
+                city: 'Stad',
+                cityPlaceholder: 'bijv. Amsterdam',
+                country: 'Land',
+                countryPlaceholder: 'bijv. Nederland',
+                latitude: 'Breedtegraad',
+                longitude: 'Lengtegraad',
+                addLocationBtn: 'Locatie toevoegen',
+                configuredLocations: 'Geconfigureerde locaties',
+                printerConfiguration: 'Printerconfiguratie',
+                autoDiscover: 'Printers automatisch detecteren',
+                autoDiscoverDesc: 'Zoekt naar Bambu Lab printers op uw netwerk',
+                discoverPrintersBtn: 'Printers zoeken',
+                selectDiscovered: 'Selecteer uit ontdekte printers',
+                choosePrinter: '-- Kies een printer --',
+                addManually: 'Printer handmatig toevoegen',
+                printerName: 'Printernaam',
+                printerNamePlaceholder: 'bijv. Bambu Lab X1',
+                ipAddress: 'IP-adres',
+                ipPlaceholder: '192.168.1.100',
+                printerCode: 'Printercode',
+                printerCodePlaceholder: 'Voer printer toegangscode in',
+                serialNumber: 'Serienummer',
+                serialPlaceholder: 'Voer printer serienummer in',
+                addPrinterBtn: 'Printer toevoegen',
+                configuredPrinters: 'Geconfigureerde printers',
+                deleteBtn: 'Verwijderen',
+                settingsSaved: 'Instellingen opgeslagen!',
+                weatherSettingsSaved: 'Weerinstellingen opgeslagen!',
+                locationAdded: 'Locatie toegevoegd!',
+                printerAdded: 'Printer toegevoegd!',
+                error: 'Fout',
+                errorLoading: 'Fout bij laden',
+                scanning: 'Scannen',
+                starting: 'Starten',
+                noDiscoveredPrinters: 'Geen printers gevonden',
+                discoveryComplete: 'Zoeken voltooid'
+            },
+            pl: {
+                title: 'Konfiguracja ESP32-TUX',
+                systemSettings: 'Ustawienia systemu',
+                brightness: 'Jasność',
+                theme: 'Motyw',
+                themeDark: 'Ciemny',
+                themeLight: 'Jasny',
+                timezone: 'Strefa czasowa',
+                selectTimezone: '-- Wybierz strefę czasową --',
+                language: 'Język',
+                saveSettings: 'Zapisz ustawienia',
+                loadSettings: 'Wczytaj ustawienia',
+                weatherSettings: 'Ustawienia pogody',
+                apiKey: 'Klucz API',
+                apiKeyPlaceholder: 'Wprowadź klucz API OpenWeatherMap',
+                saveWeatherSettings: 'Zapisz ustawienia pogody',
+                loadWeatherSettings: 'Wczytaj ustawienia pogody',
+                manageWeatherLocations: 'Zarządzaj lokalizacjami pogody',
+                addLocation: 'Dodaj lokalizację',
+                locationName: 'Nazwa lokalizacji',
+                locationNamePlaceholder: 'np. Dom, Biuro',
+                city: 'Miasto',
+                cityPlaceholder: 'np. Warszawa',
+                country: 'Kraj',
+                countryPlaceholder: 'np. Polska',
+                latitude: 'Szerokość geograficzna',
+                longitude: 'Długość geograficzna',
+                addLocationBtn: 'Dodaj lokalizację',
+                configuredLocations: 'Skonfigurowane lokalizacje',
+                printerConfiguration: 'Konfiguracja drukarki',
+                autoDiscover: 'Automatyczne wykrywanie drukarek',
+                autoDiscoverDesc: 'Wyszukuje drukarki Bambu Lab w Twojej sieci',
+                discoverPrintersBtn: 'Wykryj drukarki',
+                selectDiscovered: 'Wybierz z wykrytych drukarek',
+                choosePrinter: '-- Wybierz drukarkę --',
+                addManually: 'Dodaj drukarkę ręcznie',
+                printerName: 'Nazwa drukarki',
+                printerNamePlaceholder: 'np. Bambu Lab X1',
+                ipAddress: 'Adres IP',
+                ipPlaceholder: '192.168.1.100',
+                printerCode: 'Kod drukarki',
+                printerCodePlaceholder: 'Wprowadź kod dostępu drukarki',
+                serialNumber: 'Numer seryjny',
+                serialPlaceholder: 'Wprowadź numer seryjny drukarki',
+                addPrinterBtn: 'Dodaj drukarkę',
+                configuredPrinters: 'Skonfigurowane drukarki',
+                deleteBtn: 'Usuń',
+                settingsSaved: 'Ustawienia zapisane!',
+                weatherSettingsSaved: 'Ustawienia pogody zapisane!',
+                locationAdded: 'Lokalizacja dodana!',
+                printerAdded: 'Drukarka dodana!',
+                error: 'Błąd',
+                errorLoading: 'Błąd wczytywania',
+                scanning: 'Skanowanie',
+                starting: 'Uruchamianie',
+                noDiscoveredPrinters: 'Nie znaleziono drukarek',
+                discoveryComplete: 'Wykrywanie zakończone'
+            },
+            ru: {
+                title: 'Конфигурация ESP32-TUX',
+                systemSettings: 'Системные настройки',
+                brightness: 'Яркость',
+                theme: 'Тема',
+                themeDark: 'Тёмная',
+                themeLight: 'Светлая',
+                timezone: 'Часовой пояс',
+                selectTimezone: '-- Выберите часовой пояс --',
+                language: 'Язык',
+                saveSettings: 'Сохранить настройки',
+                loadSettings: 'Загрузить настройки',
+                weatherSettings: 'Настройки погоды',
+                apiKey: 'API ключ',
+                apiKeyPlaceholder: 'Введите ключ API OpenWeatherMap',
+                saveWeatherSettings: 'Сохранить настройки погоды',
+                loadWeatherSettings: 'Загрузить настройки погоды',
+                manageWeatherLocations: 'Управление местоположениями погоды',
+                addLocation: 'Добавить местоположение',
+                locationName: 'Название местоположения',
+                locationNamePlaceholder: 'например, Дом, Офис',
+                city: 'Город',
+                cityPlaceholder: 'например, Москва',
+                country: 'Страна',
+                countryPlaceholder: 'например, Россия',
+                latitude: 'Широта',
+                longitude: 'Долгота',
+                addLocationBtn: 'Добавить местоположение',
+                configuredLocations: 'Настроенные местоположения',
+                printerConfiguration: 'Конфигурация принтера',
+                autoDiscover: 'Автоопределение принтеров',
+                autoDiscoverDesc: 'Поиск принтеров Bambu Lab в вашей сети',
+                discoverPrintersBtn: 'Найти принтеры',
+                selectDiscovered: 'Выбрать из найденных принтеров',
+                choosePrinter: '-- Выберите принтер --',
+                addManually: 'Добавить принтер вручную',
+                printerName: 'Название принтера',
+                printerNamePlaceholder: 'например, Bambu Lab X1',
+                ipAddress: 'IP-адрес',
+                ipPlaceholder: '192.168.1.100',
+                printerCode: 'Код принтера',
+                printerCodePlaceholder: 'Введите код доступа принтера',
+                serialNumber: 'Серийный номер',
+                serialPlaceholder: 'Введите серийный номер принтера',
+                addPrinterBtn: 'Добавить принтер',
+                configuredPrinters: 'Настроенные принтеры',
+                deleteBtn: 'Удалить',
+                settingsSaved: 'Настройки сохранены!',
+                weatherSettingsSaved: 'Настройки погоды сохранены!',
+                locationAdded: 'Местоположение добавлено!',
+                printerAdded: 'Принтер добавлен!',
+                error: 'Ошибка',
+                errorLoading: 'Ошибка загрузки',
+                scanning: 'Сканирование',
+                starting: 'Запуск',
+                noDiscoveredPrinters: 'Принтеры не найдены',
+                discoveryComplete: 'Поиск завершен'
+            }
+        };
+        
+        let currentLang = 'en';
+        
+        function t(key) {
+            return translations[currentLang][key] || translations['en'][key] || key;
+        }
+        
+        function setLanguage(lang) {
+            currentLang = lang;
+            updatePageText();
+        }
+        
+        function updatePageText() {
+            // Update all translatable elements
+            document.title = t('title');
+            document.querySelector('h1').textContent = '🎨 ' + t('title');
+            // We'll add data-i18n attributes to elements for automatic translation
+        }
+        
+        function translatePage() {
+            document.title = t('title');
+            
+            // Update page heading
+            const h1 = document.querySelector('h1');
+            if (h1) h1.textContent = '🎨 ' + t('title');
+            
+            // Translate all elements with data-i18n attribute
+            document.querySelectorAll('[data-i18n]').forEach(elem => {
+                const key = elem.getAttribute('data-i18n');
+                if (elem.tagName === 'INPUT' && elem.type !== 'button') {
+                    elem.placeholder = t(key);
+                } else {
+                    elem.textContent = t(key);
+                }
+            });
+            
+            // Update select options if needed
+            updateSelectOptions();
+        }
+        
+        function updateSelectOptions() {
+            // Theme select
+            const themeSelect = document.getElementById('theme');
+            if (themeSelect) {
+                const darkOpt = themeSelect.querySelector('option[value="dark"]');
+                const lightOpt = themeSelect.querySelector('option[value="light"]');
+                if (darkOpt) darkOpt.textContent = t('themeDark');
+                if (lightOpt) lightOpt.textContent = t('themeLight');
+            }
+            
+            // Timezone select first option
+            const tzSelect = document.getElementById('timezone');
+            if (tzSelect && tzSelect.options[0]) {
+                tzSelect.options[0].textContent = t('selectTimezone');
+            }
+            
+            // Discovered printer select
+            const printerSelect = document.getElementById('discoveredPrinterDropdown');
+            if (printerSelect && printerSelect.options[0]) {
+                printerSelect.options[0].textContent = t('choosePrinter');
+            }
+        }
+        
         // Use relative URLs so fetch works from any hostname/IP
         const apiBase = '';
         
@@ -266,7 +629,9 @@ static const char *HTML_PAGE = R"rawliteral(
             elem.className = 'status ' + (isSuccess ? 'success' : 'error');
             
             // Only set auto-clear timeout for non-transient messages (don't clear during discovery)
-            if (!message.includes('Scanning') && !message.includes('Starting')) {
+            // Check if message contains scanning/starting keywords in any language
+            const isTransient = message.includes(t('scanning')) || message.includes(t('starting'));
+            if (!isTransient) {
                 // Clear after 5 seconds for persistent messages (errors, success)
                 if (!elem.dataset.clearTimeout) {
                     elem.dataset.clearTimeout = setTimeout(() => { 
@@ -298,7 +663,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 body: JSON.stringify(data)
             })
             .then(r => r.json())
-            .then(d => showStatus('settingsStatus', 'Settings saved!', d.success))
+            .then(d => showStatus('settingsStatus', t('settingsSaved'), d.success))
             .catch(e => showStatus('settingsStatus', 'Error: ' + e, false));
         }
         
@@ -312,7 +677,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 document.getElementById('timezone').value = d.timezone;
                 document.getElementById('language').value = d.language || 'en';
             })
-            .catch(e => showStatus('settingsStatus', 'Error loading: ' + e, false));
+            .catch(e => showStatus('settingsStatus', t('errorLoading') + ': ' + e, false));
         }
         
         // Weather functions
@@ -327,7 +692,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 body: JSON.stringify(data)
             })
             .then(r => r.json())
-            .then(d => showStatus('weatherStatus', 'Weather settings saved!', d.success))
+            .then(d => showStatus('weatherStatus', t('weatherSettingsSaved'), d.success))
             .catch(e => showStatus('weatherStatus', 'Error: ' + e, false));
         }
         
@@ -337,7 +702,7 @@ static const char *HTML_PAGE = R"rawliteral(
             .then(d => {
                 document.getElementById('apiKey').value = d.apiKey || '';
             })
-            .catch(e => showStatus('weatherStatus', 'Error loading: ' + e, false));
+            .catch(e => showStatus('weatherStatus', t('errorLoading') + ': ' + e, false));
         }
         
         // Weather locations functions
@@ -362,7 +727,7 @@ static const char *HTML_PAGE = R"rawliteral(
             })
             .then(r => r.json())
             .then(d => {
-                showStatus('locationStatus', 'Location added!', d.success);
+                showStatus('locationStatus', t('locationAdded'), d.success);
                 if (d.success) {
                     document.getElementById('locationName').value = '';
                     document.getElementById('locationCity').value = '';
@@ -393,7 +758,7 @@ static const char *HTML_PAGE = R"rawliteral(
                     list.innerHTML = '<li class="printer-item">No locations configured</li>';
                 }
             })
-            .catch(e => showStatus('locationStatus', 'Error loading: ' + e, false));
+            .catch(e => showStatus('locationStatus', t('errorLoading') + ': ' + e, false));
         }
         
         function removeWeatherLocation(index) {
@@ -418,7 +783,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 discoveryCheckInterval = null;
             }
             
-            showStatus('discoverStatus', 'Starting network scan...', true);
+            showStatus('discoverStatus', t('starting') + ' network scan...', true);
             document.getElementById('discoveredPrinterSection').style.display = 'none';
             
             // Start async discovery on server
@@ -426,7 +791,7 @@ static const char *HTML_PAGE = R"rawliteral(
             .then(r => r.json())
             .then(d => {
                 if (d.status === 'started') {
-                    showStatus('discoverStatus', 'Scanning network for printers... 0%', true);
+                    showStatus('discoverStatus', t('scanning') + ' network for printers... 0%', true);
                     // Start polling for discovery status
                     discoveryCheckInterval = setTimeout(checkDiscoveryStatus, 300);
                 } else {
@@ -453,7 +818,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 
                 if (d.in_progress) {
                     // Update status text directly without going through showStatus to avoid clearing
-                    statusElem.textContent = `Scanning: ${d.progress}% complete (${d.count} found so far)...`;
+                    statusElem.textContent = `${t('scanning')}: ${d.progress}% complete (${d.count} found so far)...`;
                     statusElem.className = 'status success';
                     // Schedule next poll in 300ms
                     discoveryCheckInterval = setTimeout(checkDiscoveryStatus, 300);
@@ -594,7 +959,7 @@ static const char *HTML_PAGE = R"rawliteral(
             })
             .then(r => r.json())
             .then(d => {
-                showStatus('printerStatus', 'Printer added!', d.success);
+                showStatus('printerStatus', t('printerAdded'), d.success);
                 if (d.success) {
                     document.getElementById('printerName').value = '';
                     document.getElementById('printerIP').value = '';
@@ -627,7 +992,7 @@ static const char *HTML_PAGE = R"rawliteral(
                     list.innerHTML = '<li class="printer-item">No printers configured</li>';
                 }
             })
-            .catch(e => showStatus('printerStatus', 'Error loading: ' + e, false));
+            .catch(e => showStatus('printerStatus', t('errorLoading') + ': ' + e, false));
         }
         
         function removePrinter(index) {
@@ -675,7 +1040,7 @@ static const char *HTML_PAGE = R"rawliteral(
                     list.innerHTML = '<li class="printer-item">No networks configured</li>';
                 }
             })
-            .catch(e => showStatus('networkStatus', 'Error loading: ' + e, false));
+            .catch(e => showStatus('networkStatus', t('errorLoading') + ': ' + e, false));
         }
         
         function addNetwork() {
@@ -722,6 +1087,19 @@ static const char *HTML_PAGE = R"rawliteral(
         
         // Load data on page load
         window.addEventListener('load', () => {
+            // Load language from localStorage or default to English
+            const savedLang = localStorage.getItem('language') || 'en';
+            currentLang = savedLang;
+            document.getElementById('language').value = savedLang;
+            
+            // Add language change listener
+            document.getElementById('language').addEventListener('change', (e) => {
+                currentLang = e.target.value;
+                localStorage.setItem('language', currentLang);
+                translatePage();
+            });
+            
+            translatePage();
             loadSettings();
             loadWeatherSettings();
             loadWeatherLocations();
@@ -1530,6 +1908,8 @@ esp_err_t WebServer::handle_api_device_info(httpd_req_t *req) {
     
     char *json_str = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = httpd_resp_send(req, json_str, strlen(json_str));
     
     free(json_str);
@@ -1555,6 +1935,8 @@ esp_err_t WebServer::handle_api_networks_get(httpd_req_t *req) {
     
     char *json_str = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = httpd_resp_send(req, json_str, strlen(json_str));
     
     free(json_str);

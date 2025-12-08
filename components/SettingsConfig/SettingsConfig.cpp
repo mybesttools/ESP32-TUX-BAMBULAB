@@ -27,6 +27,11 @@ SOFTWARE.
 #include <sys/stat.h>
 static const char* TAG = "SettingsConfig";
 
+// Storage health monitoring (extern C for linkage with main.cpp)
+extern "C" {
+    void storage_health_record_sd_error(void);
+}
+
 // Storage paths - prefer SD card over SPIFFS
 #define SDCARD_SETTINGS_PATH "/sdcard/settings.json"
 #define SPIFFS_SETTINGS_PATH "/spiffs/settings.json"
@@ -59,17 +64,17 @@ static bool is_sdcard_available() {
  * Prefers SD card if available, falls back to SPIFFS
  */
 static string get_settings_path() {
-    // First check if settings exist on SD card
     struct stat st;
-    if (stat(SDCARD_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
-        ESP_LOGI(TAG, "Using settings from SD card: %s", SDCARD_SETTINGS_PATH);
-        return SDCARD_SETTINGS_PATH;
-    }
     
-    // Check if settings exist on SPIFFS
-    if (stat(SPIFFS_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
-        // If SD card is available, migrate settings to SD card
-        if (is_sdcard_available()) {
+    // Priority 1: Check if SD card is available and has settings
+    if (is_sdcard_available()) {
+        if (stat(SDCARD_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
+            ESP_LOGI(TAG, "Using settings from SD card: %s", SDCARD_SETTINGS_PATH);
+            return SDCARD_SETTINGS_PATH;
+        }
+        
+        // SD card available but no settings - check if we should migrate from SPIFFS
+        if (stat(SPIFFS_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
             ESP_LOGI(TAG, "Migrating settings from SPIFFS to SD card");
             // Read from SPIFFS
             ifstream src(SPIFFS_SETTINGS_PATH);
@@ -88,14 +93,16 @@ static string get_settings_path() {
                 }
             }
         }
-        ESP_LOGI(TAG, "Using settings from SPIFFS: %s", SPIFFS_SETTINGS_PATH);
-        return SPIFFS_SETTINGS_PATH;
-    }
-    
-    // No existing settings - use SD card if available, else SPIFFS
-    if (is_sdcard_available()) {
+        
+        // SD card available, use it for new settings
         ESP_LOGI(TAG, "New settings will be stored on SD card: %s", SDCARD_SETTINGS_PATH);
         return SDCARD_SETTINGS_PATH;
+    }
+    
+    // Priority 2: Fall back to SPIFFS if SD card not available
+    if (stat(SPIFFS_SETTINGS_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
+        ESP_LOGI(TAG, "Using settings from SPIFFS: %s", SPIFFS_SETTINGS_PATH);
+        return SPIFFS_SETTINGS_PATH;
     }
     
     ESP_LOGI(TAG, "New settings will be stored on SPIFFS: %s", SPIFFS_SETTINGS_PATH);
@@ -375,26 +382,123 @@ void SettingsConfig::read_json_file()
     ifstream jsonfile(file_name);
     if (!jsonfile.is_open())
     {
-        ESP_LOGE(TAG,"File open for read failed %s",file_name.c_str());
+        ESP_LOGW(TAG,"File open for read failed %s - trying backup",file_name.c_str());
+        
+        // Try to restore from backup
+        std::string backup_path = file_name + ".backup";
+        ifstream backup_file(backup_path);
+        if (backup_file.is_open()) {
+            ESP_LOGI(TAG, "Restoring config from backup: %s", backup_path.c_str());
+            jsonString.assign((std::istreambuf_iterator<char>(backup_file)),
+                        (std::istreambuf_iterator<char>()));
+            backup_file.close();
+            
+            // Write restored backup to main file
+            ofstream restore_file(file_name);
+            if (restore_file.is_open()) {
+                restore_file << jsonString;
+                restore_file.close();
+                ESP_LOGI(TAG, "Config restored from backup successfully");
+            }
+            return;
+        }
+        
+        ESP_LOGE(TAG,"No backup found, creating default config");
         save_config();  // create file with default values
+        return;
     }
 
     jsonString.assign((std::istreambuf_iterator<char>(jsonfile)),
                 (std::istreambuf_iterator<char>()));
 
     jsonfile.close();
+    
+    // Validate JSON by attempting to parse it
+    cJSON* test_root = cJSON_Parse(jsonString.c_str());
+    if (test_root == NULL) {
+        ESP_LOGE(TAG, "Config file corrupted (invalid JSON) - restoring from backup");
+        
+        // Try to restore from backup
+        std::string backup_path = file_name + ".backup";
+        ifstream backup_file(backup_path);
+        if (backup_file.is_open()) {
+            ESP_LOGI(TAG, "Restoring config from backup: %s", backup_path.c_str());
+            jsonString.assign((std::istreambuf_iterator<char>(backup_file)),
+                        (std::istreambuf_iterator<char>()));
+            backup_file.close();
+            
+            // Validate backup
+            cJSON* backup_root = cJSON_Parse(jsonString.c_str());
+            if (backup_root != NULL) {
+                cJSON_Delete(backup_root);
+                
+                // Write restored backup to main file
+                ofstream restore_file(file_name);
+                if (restore_file.is_open()) {
+                    restore_file << jsonString;
+                    restore_file.close();
+                    ESP_LOGI(TAG, "Config restored from backup successfully");
+                }
+            } else {
+                ESP_LOGE(TAG, "Backup also corrupted - creating default config");
+                save_config();
+            }
+        } else {
+            ESP_LOGE(TAG, "No backup found - creating default config");
+            save_config();
+        }
+    } else {
+        cJSON_Delete(test_root);
+    }
 }
 
 void SettingsConfig::write_json_file()
 {
+    // Create backup before writing (backup path = original + ".backup")
+    std::string backup_path = file_name + ".backup";
+    
+    // If original exists, copy it to backup
+    struct stat st;
+    if (stat(file_name.c_str(), &st) == 0) {
+        // Read existing file
+        ifstream src(file_name, std::ios::binary);
+        if (src.is_open()) {
+            ofstream dst(backup_path, std::ios::binary);
+            if (dst.is_open()) {
+                dst << src.rdbuf();
+                dst.close();
+                ESP_LOGI(TAG, "Created backup: %s", backup_path.c_str());
+            }
+            src.close();
+        }
+    }
+    
+    // Write new config
     ofstream jsonfile(file_name);
     if (!jsonfile.is_open())
     {
         ESP_LOGE(TAG,"File open for write failed %s",file_name.c_str());
+        
+        // Record SD error if writing to SD card
+        if (file_name.find("/sdcard/") == 0) {
+            storage_health_record_sd_error();
+        }
+        
         return ;//ESP_FAIL;
     }
     jsonfile << jsonString;
     jsonfile.flush();
+    
+    // Check for write errors
+    if (jsonfile.fail()) {
+        ESP_LOGE(TAG, "Write failed for %s", file_name.c_str());
+        
+        // Record SD error if writing to SD card
+        if (file_name.find("/sdcard/") == 0) {
+            storage_health_record_sd_error();
+        }
+    }
+    
     jsonfile.close();
     
     ESP_LOGI(TAG, "Wrote config to %s (size: %d bytes)", file_name.c_str(), jsonString.length());

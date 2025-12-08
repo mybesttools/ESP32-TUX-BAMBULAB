@@ -109,6 +109,9 @@ using namespace std ;
 #include "BambuMonitor.hpp"
 #include "helpers/helper_bambu.hpp"
 
+// Storage health monitoring
+#include "helpers/helper_storage_health.h"
+
 // Web server for configuration
 #include "WebServer.hpp"
 

@@ -1,10 +1,53 @@
-# Bambu Lab Integration Documentation Index
+# ESP32-TUX Documentation Index
 
-Complete documentation set for integrating Bambu Lab printer monitoring into ESP32-TUX.
+Complete documentation for the ESP32-TUX project including Bambu Lab printer integration and internationalization.
 
 ## 📚 Documents Overview
 
-### 1. **BAMBU_ANALYSIS_SUMMARY.md** ⭐ START HERE
+### Core System Documentation
+
+### 1. **I18N_IMPLEMENTATION_SUMMARY.md** ⭐ NEW
+
+- **Purpose**: Complete multilingual support implementation summary
+- **Audience**: Developers, users
+- **Time to read**: 15 minutes
+- **Content**:
+  - Full 5-language web UI translation (EN/DE/NL/PL/RU)
+  - Translation system architecture
+  - Testing results and verification
+  - Next steps for font generation
+  - Impact assessment
+
+### 2. **WEB_UI_I18N.md**
+
+- **Purpose**: Detailed web interface internationalization guide
+- **Audience**: Developers
+- **Time to read**: 30 minutes
+- **Content**:
+  - Translation dictionary structure
+  - HTML integration with data-i18n attributes
+  - JavaScript translation API
+  - Adding new translations
+  - Testing procedures
+  - Translation key reference
+
+### 3. **FONT_GENERATION.md**
+
+- **Purpose**: Step-by-step Cyrillic font generation guide
+- **Audience**: Developers
+- **Time to read**: 20 minutes
+- **Content**:
+  - LVGL online font converter instructions
+  - CLI automation with lv_font_conv
+  - Character range specifications
+  - Integration into project
+  - Troubleshooting font issues
+
+---
+
+### Bambu Lab Integration Documentation
+
+### 4. **BAMBU_ANALYSIS_SUMMARY.md** ⭐ START HERE
 
 - **Purpose**: Executive summary and key findings
 - **Audience**: Decision makers, project managers
@@ -16,7 +59,7 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
   - Timeline and budget
   - Success metrics
 
-### 2. **INTEGRATION_PLAN.md**
+### 5. **INTEGRATION_PLAN.md**
 
 - **Purpose**: High-level integration strategy
 - **Audience**: Technical leads, architects
@@ -29,7 +72,7 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
   - Storage strategy
   - Dependencies and next steps
 
-### 3. **BAMBU_TECHNICAL_DESIGN.md**
+### 6. **BAMBU_TECHNICAL_DESIGN.md**
 
 - **Purpose**: Detailed technical specifications
 - **Audience**: Developers
@@ -43,13 +86,13 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
   - Build system integration
   - Memory considerations
 
-### 4. **BAMBU_QUICKSTART.md**
+### 7. **BAMBU_QUICKSTART.md**
 
 - **Purpose**: Step-by-step implementation guide
 - **Audience**: Developers (hands-on)
 - **Time to read**: 45 minutes (implementation time: 4 weeks)
 
-### 5. **MQTT_QUICK_START.md** ⭐ TESTING
+### 8. **MQTT_QUICK_START.md** ⭐ TESTING
 
 - **Purpose**: Quick reference for MQTT setup and testing
 - **Audience**: Developers, testers
@@ -60,7 +103,7 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
   - ESP32 configuration
   - Troubleshooting quick reference
 
-### 6. **MQTT_TESTING_GUIDE.md**
+### 9. **MQTT_TESTING_GUIDE.md**
 
 - **Purpose**: Comprehensive MQTT testing documentation
 - **Audience**: Developers, QA
@@ -71,14 +114,13 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
   - Log interpretation
   - Complete troubleshooting guide
   - MQTT protocol reference
-- **Content**:
   - Phase-by-phase breakdown
   - Code templates for each phase
   - File creation checklist
   - Build and test instructions
   - Success criteria
 
-### 5. **BAMBU_CODE_REFERENCE.md**
+### 10. **BAMBU_CODE_REFERENCE.md**
 
 - **Purpose**: Reference guide to bambu_project source code
 - **Audience**: Developers extracting code
@@ -92,6 +134,12 @@ Complete documentation set for integrating Bambu Lab printer monitoring into ESP
 ---
 
 ## 🎯 Quick Navigation
+
+### For i18n Implementation
+
+1. Read: **I18N_IMPLEMENTATION_SUMMARY.md** (15 min) - Overview of what's done
+2. Reference: **WEB_UI_I18N.md** (30 min) - How to use/extend translations
+3. Action: **FONT_GENERATION.md** (20 min) - Generate Cyrillic fonts
 
 ### For Project Approval
 
