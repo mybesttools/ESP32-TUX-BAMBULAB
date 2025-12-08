@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -474,17 +475,34 @@ int bambu_mqtt_start(bambu_mqtt_client_handle_t client) {
     // TCP connect
     char port_str[6];
     snprintf(port_str, sizeof(port_str), "%d", client->config.port);
+    
+    // Add small delay before connection attempt to allow network stack to settle
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
     ret = mbedtls_net_connect(&client->net_ctx, client->config.host, port_str, MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) {
-        ESP_LOGE(TAG, "TCP connect failed: -0x%04x", -ret);
+        char err_buf[100];
+        mbedtls_strerror(ret, err_buf, sizeof(err_buf));
+        ESP_LOGE(TAG, "TCP connect to %s:%s failed: -0x%04x (%s)", client->config.host, port_str, -ret, err_buf);
+        ESP_LOGE(TAG, "Ensure ESP32 can route to printer network and firewall allows outbound connections");
         return -1;
     }
     
     client->socket_fd = client->net_ctx.fd;
     
+    // Enable socket options for better reliability
+    int keepalive = 1;
+    int keepidle = 30;
+    int keepintvl = 10;
+    int keepcnt = 3;
+    setsockopt(client->socket_fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+    setsockopt(client->socket_fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+    setsockopt(client->socket_fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+    setsockopt(client->socket_fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+    
     // Set socket timeout to prevent infinite hangs
     struct timeval timeout;
-    timeout.tv_sec = 10;  // 10 second timeout
+    timeout.tv_sec = 15;  // 15 second timeout for cross-subnet connections
     timeout.tv_usec = 0;
     setsockopt(client->socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(client->socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));

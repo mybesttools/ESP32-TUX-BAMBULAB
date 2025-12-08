@@ -56,8 +56,9 @@ LV_FONT_DECLARE(font_7seg_56)
 LV_FONT_DECLARE(font_robotomono_13)
 
 LV_FONT_DECLARE(font_fa_14)
-#define FA_SYMBOL_BLE "\xEF\x8A\x94"      // 0xf294
-#define FA_SYMBOL_SETTINGS "\xEF\x80\x93" // 0xf0ad
+
+// Include Font Awesome icon definitions
+#include "fonts/fa_icons.h"
 
 /*********************
  *      DEFINES
@@ -299,11 +300,11 @@ static int current_page = 0;
 void lv_setup_styles()
 {
     // Use Polish fonts with Latin Extended characters for diacritics
-    font_symbol = &font_montserrat_pl_14;
-    font_normal = &font_montserrat_pl_14;
-    font_large = &font_montserrat_pl_16;
-    font_xl = &font_montserrat_pl_24;
-    font_xxl = &font_montserrat_pl_32;
+    font_symbol = &font_montserrat_int_14;
+    font_normal = &font_montserrat_int_14;
+    font_large = &font_montserrat_int_16;
+    font_xl = &font_montserrat_int_24;
+    font_xxl = &font_montserrat_int_32;
     font_fa = &font_fa_14;
 
     screen_h = lv_obj_get_height(lv_scr_act());
@@ -437,7 +438,7 @@ static void create_header(lv_obj_t *parent)
 
     // HEADER TITLE
     label_title = lv_label_create(panel_title);
-    lv_label_set_text(label_title, LV_SYMBOL_HOME " BAMBULAB MONITOR");
+    lv_label_set_text(label_title, FA_ICON_HOME " BAMBULAB MONITOR");
 
     // HEADER STATUS ICON PANEL
     panel_status = lv_obj_create(panel_header);
@@ -446,7 +447,7 @@ static void create_header(lv_obj_t *parent)
 
     // BLE (hidden if not configured)
     icon_ble = lv_label_create(panel_status);
-    lv_label_set_text(icon_ble, FA_SYMBOL_BLE);
+    lv_label_set_text(icon_ble, FA_ICON_BLE);
     lv_obj_add_style(icon_ble, &style_ble, 0);
     #ifndef CONFIG_TUX_HAVE_BLUETOOTH
     lv_obj_add_flag(icon_ble, LV_OBJ_FLAG_HIDDEN);
@@ -454,18 +455,18 @@ static void create_header(lv_obj_t *parent)
 
     // WIFI
     icon_wifi = lv_label_create(panel_status);
-    lv_label_set_text(icon_wifi, LV_SYMBOL_WIFI);
+    lv_label_set_text(icon_wifi, FA_ICON_WIFI);
     lv_obj_add_style(icon_wifi, &style_wifi, 0);
 
     // SD CARD (will be hidden if not present)
     icon_storage = lv_label_create(panel_status);
-    lv_label_set_text(icon_storage, LV_SYMBOL_SD_CARD);
+    lv_label_set_text(icon_storage, FA_ICON_SD_CARD);
     lv_obj_add_style(icon_storage, &style_storage, 0);
     lv_obj_add_flag(icon_storage, LV_OBJ_FLAG_HIDDEN);
 
     // BATTERY (hidden if not configured)
     icon_battery = lv_label_create(panel_status);
-    lv_label_set_text(icon_battery, LV_SYMBOL_CHARGE);
+    lv_label_set_text(icon_battery, FA_ICON_BOLT);
     lv_obj_add_style(icon_battery, &style_battery, 0);
     #ifndef CONFIG_TUX_HAVE_BATTERY
     lv_obj_add_flag(icon_battery, LV_OBJ_FLAG_HIDDEN);
@@ -531,12 +532,12 @@ static void create_footer(lv_obj_t *parent)
 */
 
     /* REPLACE STATUS BAR WITH BUTTON PANEL FOR NAVIGATION */
-    // Button order: HOME | BAMBU (PRINTER) | SETTINGS | UPDATE
-    // Icons: Home | Cube (3D model) | Cog | Download
-    static const char * btnm_map[] = {LV_SYMBOL_HOME, "\xEF\x97\xB3", FA_SYMBOL_SETTINGS, LV_SYMBOL_DOWNLOAD,  NULL};
+    // Button order: HOME | SETTINGS | UPDATES
+    // Icons: Home | Cog | Download (all FontAwesome)
+    static const char * btnm_map[] = {FA_ICON_HOME, FA_ICON_COG, FA_ICON_DOWNLOAD, NULL};
     lv_obj_t * footerButtons = lv_btnmatrix_create(panel_footer);
     lv_btnmatrix_set_map(footerButtons, btnm_map);
-    lv_obj_set_style_text_font(footerButtons,&font_montserrat_pl_16,LV_PART_ITEMS);
+    lv_obj_set_style_text_font(footerButtons, font_fa, LV_PART_ITEMS);
     lv_obj_set_style_bg_opa(footerButtons,LV_OPA_TRANSP,0);
     lv_obj_set_size(footerButtons,LV_PCT(100),LV_PCT(100));
     lv_obj_set_style_border_width(footerButtons,0,LV_PART_MAIN | LV_PART_ITEMS);
@@ -650,7 +651,7 @@ static void slider_event_cb(lv_event_t * e)
 static void tux_panel_config(lv_obj_t *parent)
 {
     /******** CONFIG & TESTING ********/
-    lv_obj_t *island_2 = tux_panel_create(parent, LV_SYMBOL_EDIT " CONFIG", 200);
+    lv_obj_t *island_2 = tux_panel_create(parent, FA_ICON_EDIT " CONFIG", 200);
     lv_obj_add_style(island_2, &style_ui_island, 0);
 
     // Get Content Area to add UI elements
@@ -697,16 +698,6 @@ static void tux_panel_config(lv_obj_t *parent)
     lv_obj_align_to(weather_dropdown, weather_label, LV_ALIGN_OUT_BOTTOM_MID, 0, 5);
     lv_obj_add_event_cb(weather_dropdown, weather_location_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
 
-    // Printer Management Button
-    lv_obj_t *btn_printer = lv_btn_create(cont_2);
-    lv_obj_align(btn_printer, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_size(btn_printer, LV_SIZE_CONTENT, 30);
-    lv_obj_add_event_cb(btn_printer, printer_config_event_handler, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lbl_printer = lv_label_create(btn_printer);
-    lv_label_set_text(lbl_printer, "🖨️ Add Printer");
-    lv_obj_center(lbl_printer);
-    lv_obj_align_to(btn_printer, weather_dropdown, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
-
     // Rotate to Portait/Landscape
     lv_obj_t *btn2 = lv_btn_create(cont_2);
     lv_obj_align(btn2, LV_ALIGN_CENTER, 0, 0);
@@ -715,14 +706,14 @@ static void tux_panel_config(lv_obj_t *parent)
     lv_obj_t *lbl2 = lv_label_create(btn2);
     lv_label_set_text(lbl2, "Rotate to Landscape");
     //lv_obj_center(lbl2);
-    lv_obj_align_to(btn2, btn_printer, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
+    lv_obj_align_to(btn2, weather_dropdown, LV_ALIGN_OUT_BOTTOM_MID, 0, 15);
 }
 
 // Provision WIFI
 static void tux_panel_wifi(lv_obj_t *parent)
 {
     /******** PROVISION WIFI ********/
-    island_wifi = tux_panel_create(parent, LV_SYMBOL_WIFI " WIFI STATUS", 270);
+    island_wifi = tux_panel_create(parent, FA_ICON_WIFI " WIFI STATUS", 270);
     lv_obj_add_style(island_wifi, &style_ui_island, 0);
     // tux_panel_set_title_color(island_wifi, lv_palette_main(LV_PALETTE_BLUE));
 
@@ -740,7 +731,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
     lbl_webui_url = lv_label_create(cont_1);
     lv_obj_set_size(lbl_webui_url, LV_PCT(90), LV_SIZE_CONTENT);
     lv_label_set_long_mode(lbl_webui_url, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(lbl_webui_url, &font_montserrat_pl_14, 0);
+    lv_obj_set_style_text_font(lbl_webui_url, &font_montserrat_int_14, 0);
     lv_label_set_text(lbl_webui_url, "Web UI: Waiting for IP...");
 
     // Check for Updates button
@@ -786,7 +777,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
 static void tux_panel_ota(lv_obj_t *parent)
 {
     /******** OTA UPDATES ********/
-    island_ota = tux_panel_create(parent, LV_SYMBOL_DOWNLOAD " OTA UPDATES", 180);
+    island_ota = tux_panel_create(parent, FA_ICON_DOWNLOAD " OTA UPDATES", 180);
     lv_obj_add_style(island_ota, &style_ui_island, 0);
 
     // Get Content Area to add UI elements
@@ -822,7 +813,7 @@ static void tux_panel_ota(lv_obj_t *parent)
 
 static void tux_panel_devinfo(lv_obj_t *parent)
 {
-    island_devinfo = tux_panel_create(parent, LV_SYMBOL_TINT " DEVICE INFO", 200);
+    island_devinfo = tux_panel_create(parent, FA_ICON_TINT " DEVICE INFO", 200);
     lv_obj_add_style(island_devinfo, &style_ui_island, 0);
 
     // Get Content Area to add UI elements
@@ -848,7 +839,7 @@ static void create_page_remote(lv_obj_t *parent)
     lv_style_set_shadow_width(&style, 55);
     lv_style_set_shadow_color(&style, lv_palette_main(LV_PALETTE_BLUE));
 
-    lv_obj_t * island_remote = tux_panel_create(parent, LV_SYMBOL_KEYBOARD " REMOTE", LV_PCT(100));
+    lv_obj_t * island_remote = tux_panel_create(parent, FA_ICON_KEYBOARD " REMOTE", LV_PCT(100));
     lv_obj_add_style(island_remote, &style_ui_island, 0);
 
     // Get Content Area to add UI elements
@@ -885,6 +876,7 @@ static void slideshow_timer_cb(lv_timer_t * timer)
 
 // Forward declarations
 static void update_carousel_slides();
+static void update_time_ui_from_tm(const struct tm *dtinfo);
 
 static void create_page_home(lv_obj_t *parent)
 {
@@ -908,10 +900,15 @@ static void create_page_home(lv_obj_t *parent)
         
         // Subscribe to config changes (web UI added/removed locations or printers)
         lv_msg_subscribe(MSG_CONFIG_CHANGED, [](void *s, lv_msg_t *m) {
-            ESP_LOGI("GUI", "MSG_CONFIG_CHANGED received - rebuilding carousel");
+            ESP_LOGI("GUI", "MSG_CONFIG_CHANGED received - rebuilding carousel and applying theme");
             // Reload config from disk before rebuilding
             if (cfg) {
                 cfg->load_config();
+                
+                // Apply theme from config
+                bool is_dark = (cfg->CurrentTheme == "dark");
+                switch_theme(is_dark);
+                ESP_LOGI("GUI", "Applied theme from config: %s", cfg->CurrentTheme.c_str());
             }
             update_carousel_slides();
         }, NULL);
@@ -958,7 +955,7 @@ static void update_carousel_slides()
                     snprintf(pressure_buf, sizeof(pressure_buf), "%s: -- m/s • %s: -- hPa", TR(STR_WIND), TR(STR_PRESSURE));
                     slide.value4 = pressure_buf;  // Wind and pressure
                 } else {
-                    slide.value1 = LV_SYMBOL_WARNING;
+                    slide.value1 = FA_ICON_WARNING;
                     slide.value2 = TR(STR_API_KEY_MISSING);
                     slide.value3 = TR(STR_GO_TO_SETTINGS);
                     slide.value4 = TR(STR_ADD_API_KEY);
@@ -1050,13 +1047,21 @@ static void update_carousel_slides()
     
     // Force layout update to make carousel visible immediately
     lv_obj_update_layout(carousel_widget->container);
+    
+    // Update time display on all weather slides after recreation
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    if (timeinfo.tm_year >= 100) {  // Check if time is valid
+        update_time_ui_from_tm(&timeinfo);
+    }
 }
 
 static void create_page_settings(lv_obj_t *parent)
 {
-    /* SETTINGS PAGE PANELS */
+    /* SETTINGS PAGE - WiFi only */
     tux_panel_wifi(parent);
-    tux_panel_config(parent);
 }
 
 static void create_page_updates(lv_obj_t *parent)
@@ -1103,7 +1108,7 @@ static void create_page_bambu(lv_obj_t *parent)
     lv_obj_set_flex_flow(col_status, LV_FLEX_FLOW_COLUMN);
     
     lv_obj_t *lbl_status = lv_label_create(col_status);
-    lv_obj_set_style_text_font(lbl_status, &font_montserrat_pl_24, 0);
+    lv_obj_set_style_text_font(lbl_status, &font_montserrat_int_24, 0);
     lv_label_set_text(lbl_status, "Offline");
     
     lv_obj_t *lbl_file = lv_label_create(col_status);
@@ -1139,7 +1144,7 @@ static void create_page_bambu(lv_obj_t *parent)
     
     lv_obj_t *lbl_percent = lv_label_create(row_info);
     lv_label_set_text(lbl_percent, "0%");
-    lv_obj_set_style_text_font(lbl_percent, &font_montserrat_pl_16, 0);
+    lv_obj_set_style_text_font(lbl_percent, &font_montserrat_int_16, 0);
     
     // Time remaining with icon
     lv_obj_t *time_container = lv_obj_create(row_info);
@@ -1190,7 +1195,7 @@ static void create_page_bambu(lv_obj_t *parent)
     lv_obj_set_style_pad_right(lbl_nozzle_icon, 4, 0);
     
     lv_obj_t *lbl_nozzle = lv_label_create(nozzle_cont);
-    lv_obj_set_style_text_font(lbl_nozzle, &font_montserrat_pl_16, 0);
+    lv_obj_set_style_text_font(lbl_nozzle, &font_montserrat_int_16, 0);
     lv_label_set_text(lbl_nozzle, "N: --°C");
     
     // Bed temp
@@ -1210,8 +1215,19 @@ static void create_page_bambu(lv_obj_t *parent)
     lv_obj_set_style_pad_right(lbl_bed_icon, 4, 0);
     
     lv_obj_t *lbl_bed = lv_label_create(bed_cont);
-    lv_obj_set_style_text_font(lbl_bed, &font_montserrat_pl_16, 0);
+    lv_obj_set_style_text_font(lbl_bed, &font_montserrat_int_16, 0);
     lv_label_set_text(lbl_bed, "B: --°C");
+    
+    // === SNAPSHOT IMAGE ===
+    lv_obj_t *img_snapshot = lv_img_create(cont);
+    lv_obj_set_size(img_snapshot, 120, 90);  // 4:3 aspect ratio
+    lv_obj_align(img_snapshot, LV_ALIGN_TOP_RIGHT, -8, -8);  // Position in top right
+    lv_obj_set_style_bg_color(img_snapshot, lv_color_hex(0x202020), 0);
+    lv_obj_set_style_bg_opa(img_snapshot, LV_OPA_100, 0);
+    lv_obj_set_style_radius(img_snapshot, 4, 0);
+    lv_obj_set_style_border_width(img_snapshot, 1, 0);
+    lv_obj_set_style_border_color(img_snapshot, lv_color_hex(0x404040), 0);
+    // Will be updated when snapshot is available
     
     // === BUTTON ROW ===
     lv_obj_t *row_buttons = lv_obj_create(cont);
@@ -1252,6 +1268,8 @@ static void create_page_bambu(lv_obj_t *parent)
         lv_obj_t *layers;
         lv_obj_t *nozzle;
         lv_obj_t *bed;
+        lv_obj_t *snapshot;  // Camera snapshot image
+        int printer_index;   // Which printer this panel represents
     } bambu_widgets_t;
     
     static bambu_widgets_t widgets;
@@ -1264,6 +1282,8 @@ static void create_page_bambu(lv_obj_t *parent)
     widgets.layers = lbl_layers;
     widgets.nozzle = lbl_nozzle;
     widgets.bed = lbl_bed;
+    widgets.snapshot = img_snapshot;
+    widgets.printer_index = 0;  // TODO: Support multiple printers when carousel integration is added
     
     // Subscribe to full update message
     lv_msg_subscribe(MSG_BAMBU_FULL_UPDATE, [](void *s, lv_msg_t *m) {
@@ -1327,6 +1347,23 @@ static void create_page_bambu(lv_obj_t *parent)
         if (lv_obj_is_valid(w->bed)) {
             lv_label_set_text_fmt(w->bed, "B: %.0f°C", data->bed_temp);
         }
+        
+        // Update snapshot image if available
+        if (lv_obj_is_valid(w->snapshot)) {
+            const char* snapshot_path = bambu_get_last_snapshot_path(w->printer_index);
+            if (snapshot_path && snapshot_path[0] != '\0') {
+                // LVGL filesystem mapping: S: = /sdcard, F: = /spiffs
+                char lvgl_path[280];
+                if (strncmp(snapshot_path, "/sdcard/", 8) == 0) {
+                    snprintf(lvgl_path, sizeof(lvgl_path), "S:/%s", snapshot_path + 8);
+                } else if (strncmp(snapshot_path, "/spiffs/", 8) == 0) {
+                    snprintf(lvgl_path, sizeof(lvgl_path), "F:/%s", snapshot_path + 8);
+                } else {
+                    strncpy(lvgl_path, snapshot_path, sizeof(lvgl_path) - 1);
+                }
+                lv_img_set_src(w->snapshot, lvgl_path);
+            }
+        }
     }, &widgets);
     
     // Legacy subscriptions for backward compatibility
@@ -1356,7 +1393,7 @@ static void create_splash_screen()
     // MyBestTools text
     lv_obj_t * splash_text = lv_label_create(splash_container);
     lv_label_set_text(splash_text, "MyBestTools");
-    lv_obj_set_style_text_font(splash_text, &font_montserrat_pl_24, 0);
+    lv_obj_set_style_text_font(splash_text, &font_montserrat_int_24, 0);
     lv_obj_set_style_text_color(splash_text, lv_color_white(), 0);
 
     //lv_scr_load_anim(splash_screen, LV_SCR_LOAD_ANIM_FADE_IN, 5000, 10, true);
@@ -1404,6 +1441,18 @@ static void show_ui()
         ESP_LOGI(TAG, "Slideshow mode enabled - auto-cycling every %d ms", SLIDESHOW_SLIDE_DURATION_MS);
     }
 
+    // Apply initial brightness and theme from config
+    if (cfg) {
+        // Apply brightness
+        lcd.setBrightness(cfg->Brightness);
+        ESP_LOGI(TAG, "Applied initial brightness from config: %d", cfg->Brightness);
+        
+        // Apply theme
+        bool is_dark = (cfg->CurrentTheme == "dark");
+        switch_theme(is_dark);
+        ESP_LOGI(TAG, "Applied initial theme from config: %s", cfg->CurrentTheme.c_str());
+    }
+    
     // Load main screen with animation
     //lv_scr_load(screen_container);
     lv_scr_load_anim(screen_container, LV_SCR_LOAD_ANIM_FADE_IN, 1000,100, true);
@@ -1537,7 +1586,7 @@ void switch_theme(bool dark)
         theme_current = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE),
                                               lv_palette_main(LV_PALETTE_GREEN),
                                               1, /*Light or dark mode*/
-                                              &font_montserrat_pl_14);
+                                              &font_montserrat_int_14);
         bg_theme_color = lv_palette_darken(LV_PALETTE_GREY, 5);
         lv_disp_set_theme(disp, theme_current);
         //bg_theme_color = theme_current->flags & LV_USE_THEME_DEFAULT ? lv_palette_darken(LV_PALETTE_GREY, 5) : lv_palette_lighten(LV_PALETTE_GREY, 2);
@@ -1554,7 +1603,7 @@ void switch_theme(bool dark)
                                               lv_palette_main(LV_PALETTE_BLUE),
                                               lv_palette_main(LV_PALETTE_RED),
                                               0, /*Light or dark mode*/
-                                              &font_montserrat_pl_14);
+                                              &font_montserrat_int_14);
         //bg_theme_color = lv_palette_lighten(LV_PALETTE_GREY, 5);    // #BFBFBD
         // bg_theme_color = lv_color_make(0,0,255); 
         bg_theme_color = lv_color_hex(0xBFBFBD); //383837
@@ -2326,27 +2375,46 @@ static void footer_button_event_handler(lv_event_t * e)
 
         // HOME (Button 0)
         if (page_id==0)  {
-            lv_obj_clean(content_container);
-            create_page_home(content_container);
+            // Don't clean content_container - carousel needs to persist
+            // Just show carousel and hide header
+            if (carousel_widget && carousel_widget->container) {
+                lv_obj_clear_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (panel_header) {
+                lv_obj_add_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
+            }
+            // Create carousel if it doesn't exist
+            if (!carousel_widget) {
+                create_page_home(content_container);
+            }
             anim_move_left_x(content_container,screen_w,0,200);
             lv_msg_send(MSG_PAGE_HOME,NULL);
         }
-        // BAMBU MONITOR / PRINTER (Button 1)
+        // WIFI & SETTINGS (Button 1)
         else if (page_id == 1) {
-            lv_obj_clean(content_container);
-            create_page_bambu(content_container);
-            anim_move_left_x(content_container,screen_w,0,200);
-            lv_msg_send(MSG_PAGE_BAMBU,NULL);
-        }
-        // SETTINGS (Button 2)
-        else if (page_id == 2) {
+            // Hide carousel when leaving home page
+            if (carousel_widget && carousel_widget->container) {
+                lv_obj_add_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
+            }
+            // Show header on other pages
+            if (panel_header) {
+                lv_obj_clear_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_clean(content_container);
             create_page_settings(content_container);
             anim_move_left_x(content_container,screen_w,0,200);
             lv_msg_send(MSG_PAGE_SETTINGS,NULL);
         }
-        // OTA UPDATES (Button 3)
-        else if (page_id == 3) {
+        // OTA UPDATES (Button 2)
+        else if (page_id == 2) {
+            // Hide carousel when leaving home page
+            if (carousel_widget && carousel_widget->container) {
+                lv_obj_add_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
+            }
+            // Show header on other pages
+            if (panel_header) {
+                lv_obj_clear_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_clean(content_container);
             create_page_updates(content_container);
             anim_move_left_x(content_container,screen_w,0,200);
@@ -2369,7 +2437,7 @@ static void status_change_cb(void * s, lv_msg_t *m)
             ESP_LOGW(TAG,"[%d] MSG_WIFI_PROV_MODE",msg_id);
             // Update QR code for PROV and wifi symbol to red?
             lv_style_set_text_color(&style_wifi, lv_palette_main(LV_PALETTE_GREY));
-            lv_label_set_text(icon_wifi, LV_SYMBOL_WIFI);
+            lv_label_set_text(icon_wifi, FA_ICON_WIFI);
 
             char qr_data[150] = {0};
             snprintf(qr_data,sizeof(qr_data),"%s",(const char*)lv_msg_get_payload(m));
@@ -2381,7 +2449,7 @@ static void status_change_cb(void * s, lv_msg_t *m)
         {
             ESP_LOGW(TAG,"[%d] MSG_WIFI_CONNECTED",msg_id);
             lv_style_set_text_color(&style_wifi, lv_palette_main(LV_PALETTE_BLUE));
-            lv_label_set_text(icon_wifi, LV_SYMBOL_WIFI);
+            lv_label_set_text(icon_wifi, FA_ICON_WIFI);
 
             if (lv_msg_get_payload(m) != NULL) {
                 char ip_data[20]={0};
@@ -2395,7 +2463,7 @@ static void status_change_cb(void * s, lv_msg_t *m)
         {
             ESP_LOGW(TAG,"[%d] MSG_WIFI_DISCONNECTED",msg_id);
             lv_style_set_text_color(&style_wifi, lv_palette_main(LV_PALETTE_GREY));
-            lv_label_set_text(icon_wifi, LV_SYMBOL_WIFI);
+            lv_label_set_text(icon_wifi, FA_ICON_WIFI);
         }
         break;
         case MSG_OTA_STATUS:
@@ -2443,27 +2511,27 @@ static void lv_update_battery(uint batval)
     if (batval < 20)
     {
         lv_style_set_text_color(&style_battery, lv_palette_main(LV_PALETTE_RED));
-        lv_label_set_text(icon_battery, LV_SYMBOL_BATTERY_EMPTY);
+        lv_label_set_text(icon_battery, FA_ICON_BATTERY_EMPTY);
     }
     else if (batval < 50)
     {
         lv_style_set_text_color(&style_battery, lv_palette_main(LV_PALETTE_RED));
-        lv_label_set_text(icon_battery, LV_SYMBOL_BATTERY_1);
+        lv_label_set_text(icon_battery, FA_ICON_BATTERY_1);
     }
     else if (batval < 70)
     {
         lv_style_set_text_color(&style_battery, lv_palette_main(LV_PALETTE_DEEP_ORANGE));
-        lv_label_set_text(icon_battery, LV_SYMBOL_BATTERY_2);
+        lv_label_set_text(icon_battery, FA_ICON_BATTERY_2);
     }
     else if (batval < 90)
     {
         lv_style_set_text_color(&style_battery, lv_palette_main(LV_PALETTE_GREEN));
-        lv_label_set_text(icon_battery, LV_SYMBOL_BATTERY_3);
+        lv_label_set_text(icon_battery, FA_ICON_BATTERY_3);
     }
     else
     {
         lv_style_set_text_color(&style_battery, lv_palette_main(LV_PALETTE_GREEN));
-        lv_label_set_text(icon_battery, LV_SYMBOL_BATTERY_FULL);
+        lv_label_set_text(icon_battery, FA_ICON_BATTERY_FULL);
     }
 }
 

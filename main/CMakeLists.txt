@@ -1,4 +1,5 @@
 idf_component_register(SRCS "main.cpp" 
+					"helpers/helper_storage_health.c"
 					"widgets/tux_panel.c" 
 					"images/dev_bg.c"
 
@@ -24,13 +25,11 @@ idf_component_register(SRCS "main.cpp"
 					# "fonts/font_7seg_58.c"
 					"fonts/font_7seg_56.c"
 
-					# Montserrat fonts with Polish characters
-					"fonts/font_montserrat_pl_14.c"
-					"fonts/font_montserrat_pl_16.c"
-					"fonts/font_montserrat_pl_24.c"
-					"fonts/font_montserrat_pl_32.c"
-
-                INCLUDE_DIRS "." "devices" "helpers" "pages" "widgets" "images"
+				# Montserrat fonts with international characters
+				"fonts/font_montserrat_int_14.c"
+				"fonts/font_montserrat_int_16.c"
+				"fonts/font_montserrat_int_24.c"
+				"fonts/font_montserrat_int_32.c"                INCLUDE_DIRS "." "devices" "helpers" "pages" "widgets" "images"
 				REQUIRES json LovyanGFX lvgl fatfs fmt SettingsConfig OpenWeatherMap spi_flash
 				app_update ota esp_event esp_timer esp_wifi wifi_provisioning spiffs esp_partition
 				esp_hw_support BambuMonitor WebServer mdns_responder

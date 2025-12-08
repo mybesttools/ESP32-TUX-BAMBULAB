@@ -145,7 +145,7 @@ esp_err_t lv_display_init()
     theme_current = lv_theme_default_init(disp, lv_palette_main(LV_PALETTE_BLUE),
                                           lv_palette_main(LV_PALETTE_RED),
                                           LV_USE_THEME_DEFAULT, /*Light or dark mode*/
-                                          &font_montserrat_pl_14);
+                                          &font_montserrat_int_14);
 
     //lv_disp_set_theme(disp, theme_current); /*Assign the theme to the display*/
     //bg_theme_color = theme_current->flags & LV_USE_THEME_DEFAULT ? DARK_COLOR_CARD : LIGHT_COLOR_CARD;

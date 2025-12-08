@@ -10,12 +10,22 @@
 #include "mqtt_client.h"
 #include "esp_log.h"
 #include "esp_tls.h"
+#include "esp_http_client.h"
 #include "cJSON.h"
 #include <cstring>
 #include <string>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <errno.h>
+
+// Storage health monitoring functions (implemented in main/helpers/helper_storage_health.c)
+extern "C" {
+    void storage_health_record_sd_error(void);
+    void storage_health_record_spiffs_error(void);
+}
 
 static const char* TAG = "BambuMonitor";
 
@@ -35,12 +45,24 @@ typedef struct {
     esp_mqtt_client_handle_t mqtt_client;  // MQTT client handle
     cJSON* last_status;                 // Last received status JSON
     time_t last_update;                 // Last update timestamp
+    time_t last_activity;               // Last activity (data received) timestamp
+    char* data_buffer;                  // Buffer for fragmented MQTT data
+    int buffer_len;                     // Current buffer length
+    int buffer_size;                    // Allocated buffer size
+    char topic_buffer[128];             // Store topic for fragmented messages
+    int sd_write_failures;              // Consecutive SD write failures
+    bool use_spiffs_only;               // Skip SD card after repeated failures
+    char last_snapshot_path[256];       // Path to last captured snapshot
 } printer_slot_t;
 
 // Global state
 static printer_slot_t printers[BAMBU_MAX_PRINTERS] = {0};
 static esp_event_handler_t registered_handler = NULL;
 static bool monitor_initialized = false;
+
+// Connection pool management (max 2 concurrent MQTT connections)
+#define MAX_CONCURRENT_CONNECTIONS 2
+static int active_connection_count = 0;
 
 // Embedded Bambu Lab root certificates
 extern const uint8_t bambu_cert_start[] asm("_binary_bambu_combined_cert_start");
@@ -82,7 +104,14 @@ static bool is_sdcard_available() {
     // Try to actually write to the SD card
     FILE* test = fopen("/sdcard/.bambu_test", "w");
     if (!test) {
-        ESP_LOGW(TAG, "SD card not writable: fopen failed (errno=%d)", errno);
+        int err = errno;
+        ESP_LOGW(TAG, "SD card not writable: fopen failed (errno=%d)", err);
+        
+        // Track SD write error for storage health monitoring
+        if (err == 5 || err == 257) {  // I/O error or block read error
+            storage_health_record_sd_error();
+        }
+        
         sdcard_available = 0;
         return false;
     }
@@ -153,6 +182,52 @@ static int find_printer_by_device_id(const char* device_id) {
 }
 
 /**
+ * @brief Find least recently active connected printer (for eviction)
+ */
+static int find_lru_connected_printer() {
+    int lru_index = -1;
+    time_t oldest_activity = 0;
+    
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].connected) {
+            if (lru_index == -1 || printers[i].last_activity < oldest_activity) {
+                oldest_activity = printers[i].last_activity;
+                lru_index = i;
+            }
+        }
+    }
+    return lru_index;
+}
+
+/**
+ * @brief Ensure connection pool doesn't exceed MAX_CONCURRENT_CONNECTIONS
+ * Disconnects least recently used connection if needed
+ */
+static void manage_connection_pool() {
+    // Count active connections
+    int count = 0;
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].connected) {
+            count++;
+        }
+    }
+    
+    active_connection_count = count;
+    
+    // If we're at or over limit, disconnect LRU
+    if (count >= MAX_CONCURRENT_CONNECTIONS) {
+        int lru = find_lru_connected_printer();
+        if (lru >= 0) {
+            ESP_LOGI(TAG, "[%d] Connection pool full (%d/%d), disconnecting LRU printer %s", 
+                     lru, count, MAX_CONCURRENT_CONNECTIONS, printers[lru].config.device_id);
+            esp_mqtt_client_stop(printers[lru].mqtt_client);
+            printers[lru].connected = false;
+            active_connection_count--;
+        }
+    }
+}
+
+/**
  * @brief MQTT event handler for all printers
  */
 static void mqtt_event_handler(void* handler_args, esp_event_base_t base, 
@@ -173,6 +248,10 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "[%d] MQTT connected to %s", index, printer->config.ip_address);
             printer->connected = true;
             printer->state = BAMBU_STATE_IDLE;
+            time(&printer->last_activity);  // Track connection time
+            active_connection_count++;
+            
+            ESP_LOGI(TAG, "Active connections: %d/%d", active_connection_count, MAX_CONCURRENT_CONNECTIONS);
             
             // Subscribe to printer status topic
             char topic[128];
@@ -189,8 +268,13 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
         
         case MQTT_EVENT_DISCONNECTED: {
             ESP_LOGW(TAG, "[%d] MQTT disconnected from %s", index, printer->config.ip_address);
+            if (printer->connected) {
+                active_connection_count--;
+            }
             printer->connected = false;
             printer->state = BAMBU_STATE_OFFLINE;
+            
+            ESP_LOGI(TAG, "Active connections: %d/%d", active_connection_count, MAX_CONCURRENT_CONNECTIONS);
             
             if (registered_handler) {
                 registered_handler(NULL, BAMBU_EVENT_BASE, BAMBU_PRINTER_DISCONNECTED, (void*)(intptr_t)index);
@@ -199,23 +283,74 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base,
         }
         
         case MQTT_EVENT_DATA: {
-            if (event->topic_len > 0 && event->data_len > 0) {
-                char topic[128] = {0};
-                if (event->topic_len < sizeof(topic)) {
-                    strncpy(topic, event->topic, event->topic_len);
+            // Update activity timestamp on data reception
+            time(&printer->last_activity);
+            
+            // Handle fragmented MQTT messages
+            if (event->data_len > 0) {
+                // Store topic on first fragment
+                if (event->current_data_offset == 0 && event->topic_len > 0) {
+                    if (event->topic_len < sizeof(printer->topic_buffer)) {
+                        strncpy(printer->topic_buffer, event->topic, event->topic_len);
+                        printer->topic_buffer[event->topic_len] = '\0';
+                    }
                 }
-                process_printer_data(index, topic, event->data, event->data_len);
+                
+                // Allocate or expand buffer for this fragment
+                int new_len = printer->buffer_len + event->data_len;
+                if (new_len > printer->buffer_size) {
+                    int new_size = (new_len + 1023) & ~1023; // Round up to 1KB
+                    if (new_size > 65536) {
+                        ESP_LOGW(TAG, "[%d] Message too large (%d bytes), discarding", index, new_size);
+                        free(printer->data_buffer);
+                        printer->data_buffer = NULL;
+                        printer->buffer_len = 0;
+                        printer->buffer_size = 0;
+                        break;
+                    }
+                    char* new_buf = (char*)realloc(printer->data_buffer, new_size);
+                    if (!new_buf) {
+                        ESP_LOGE(TAG, "[%d] Failed to allocate %d bytes for MQTT data", index, new_size);
+                        free(printer->data_buffer);
+                        printer->data_buffer = NULL;
+                        printer->buffer_len = 0;
+                        printer->buffer_size = 0;
+                        break;
+                    }
+                    printer->data_buffer = new_buf;
+                    printer->buffer_size = new_size;
+                }
+                
+                // Append this fragment
+                memcpy(printer->data_buffer + printer->buffer_len, event->data, event->data_len);
+                printer->buffer_len += event->data_len;
+                
+                // Check if this is the last fragment
+                if (printer->buffer_len >= event->total_data_len) {
+                    // Process complete message
+                    process_printer_data(index, printer->topic_buffer, printer->data_buffer, printer->buffer_len);
+                    
+                    // Reset buffer for next message
+                    printer->buffer_len = 0;
+                }
             }
             break;
         }
         
         case MQTT_EVENT_ERROR: {
-            ESP_LOGE(TAG, "[%d] MQTT error", index);
+            ESP_LOGE(TAG, "[%d] MQTT error for %s", index, printer->config.ip_address);
             if (event->error_handle) {
                 if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-                    ESP_LOGE(TAG, "[%d] TLS error: 0x%x, stack: 0x%x", index,
+                    ESP_LOGE(TAG, "[%d] TCP transport error - esp_err: 0x%x, tls_stack_err: 0x%x", 
+                            index,
                             event->error_handle->esp_tls_last_esp_err,
                             event->error_handle->esp_tls_stack_err);
+                    ESP_LOGE(TAG, "[%d] Possible network routing issue - check if ESP32 can reach %s from current network", 
+                            index, printer->config.ip_address);
+                } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                    ESP_LOGE(TAG, "[%d] Connection refused by %s - check credentials", index, printer->config.ip_address);
+                } else {
+                    ESP_LOGE(TAG, "[%d] Error type: %d", index, event->error_handle->error_type);
                 }
             }
             printer->state = BAMBU_STATE_OFFLINE;
@@ -257,20 +392,21 @@ static void process_printer_data(int index, const char* topic, const char* data,
     
     ESP_LOGD(TAG, "[%d] Data from %s (%d bytes)", index, serial, data_len);
     
-    // Parse JSON
+    // Parse JSON - use ParseWithLength to handle large messages better
     if (data_len <= 0 || data_len > 65536) return;
     
-    char* json_str = (char*)malloc(data_len + 1);
-    if (!json_str) return;
-    
-    memcpy(json_str, data, data_len);
-    json_str[data_len] = '\0';
-    
-    cJSON* json = cJSON_Parse(json_str);
-    free(json_str);
+    cJSON* json = cJSON_ParseWithLength(data, data_len);
     
     if (!json) {
-        ESP_LOGW(TAG, "[%d] Failed to parse JSON", index);
+        // Rate-limit error logging (max once per 30 seconds per printer)
+        static time_t last_error_time[BAMBU_MAX_PRINTERS] = {0};
+        time_t now = time(NULL);
+        
+        if (now - last_error_time[index] >= 30) {
+            ESP_LOGW(TAG, "[%d] Failed to parse JSON (data_len=%d, first 50 chars: %.50s)", 
+                     index, data_len, data);
+            last_error_time[index] = now;
+        }
         return;
     }
     
@@ -354,45 +490,98 @@ static void process_printer_data(int index, const char* topic, const char* data,
                 }
             }
             
-            // Write to file - try SD card first, fallback to SPIFFS
+            // Write to file - try SD card first (with retry), fallback to SPIFFS
             char* output = cJSON_PrintUnformatted(mini);
             if (output) {
+                size_t len = strlen(output);
                 std::string path = get_printer_cache_path(serial);
-                FILE* f = fopen(path.c_str(), "w");
-                if (f) {
-                    size_t len = strlen(output);
-                    size_t written = fwrite(output, 1, len, f);
-                    fclose(f);
-                    if (written == len) {
-                        ESP_LOGI(TAG, "[%d] Cache updated: %s (%zu bytes)", index, path.c_str(), written);
-                    } else {
-                        ESP_LOGW(TAG, "[%d] Partial write to %s: %zu/%zu bytes", index, path.c_str(), written, len);
-                    }
-                } else {
-                    int save_errno = errno;
-                    ESP_LOGW(TAG, "[%d] Failed to write cache: %s (errno=%d)", index, path.c_str(), save_errno);
+                bool is_sdcard = (path.find("/sdcard/") == 0);
+                bool write_success = false;
+                
+                // Try SD card with retry logic (unless flagged to skip)
+                if (is_sdcard && !printers[index].use_spiffs_only) {
+                    const int MAX_RETRIES = 3;
+                    const int RETRY_DELAYS_MS[] = {10, 50, 200};
                     
-                    // If SD card write failed, try SPIFFS as fallback
-                    if (path.find("/sdcard/") == 0) {
-                        std::string spiffs_path = std::string(SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
-                        
-                        // Make sure SPIFFS printer directory exists
-                        struct stat st;
-                        if (stat(SPIFFS_PRINTER_PATH, &st) != 0) {
-                            mkdir(SPIFFS_PRINTER_PATH, 0755);
+                    for (int retry = 0; retry < MAX_RETRIES && !write_success; retry++) {
+                        if (retry > 0) {
+                            vTaskDelay(pdMS_TO_TICKS(RETRY_DELAYS_MS[retry - 1]));
                         }
                         
-                        f = fopen(spiffs_path.c_str(), "w");
+                        FILE* f = fopen(path.c_str(), "w");
                         if (f) {
-                            size_t len = strlen(output);
                             size_t written = fwrite(output, 1, len, f);
                             fclose(f);
-                            if (written == len) {
-                                ESP_LOGI(TAG, "[%d] Cache written to SPIFFS fallback: %s (%zu bytes)", index, spiffs_path.c_str(), written);
+                            
+                            // Verify write
+                            struct stat st;
+                            if (written == len && stat(path.c_str(), &st) == 0 && st.st_size == (off_t)len) {
+                                ESP_LOGI(TAG, "[%d] Cache updated: %s (%zu bytes)%s", 
+                                         index, path.c_str(), written, retry > 0 ? " (retry succeeded)" : "");
+                                printers[index].sd_write_failures = 0; // Reset on success
+                                write_success = true;
+                            } else {
+                                ESP_LOGW(TAG, "[%d] Write verification failed: %s (wrote %zu, stat=%lld)", 
+                                         index, path.c_str(), written, (long long)(st.st_size));
+                                storage_health_record_sd_error();
                             }
                         } else {
-                            ESP_LOGE(TAG, "[%d] SPIFFS fallback also failed: %s (errno=%d)", index, spiffs_path.c_str(), errno);
+                            ESP_LOGW(TAG, "[%d] Failed to open %s (errno=%d)", index, path.c_str(), errno);
+                            storage_health_record_sd_error();
                         }
+                    }
+                    
+                    // Track failures and switch to SPIFFS-only after threshold
+                    if (!write_success) {
+                        printers[index].sd_write_failures++;
+                        if (printers[index].sd_write_failures >= 3) {
+                            ESP_LOGE(TAG, "[%d] SD card unreliable (%d consecutive failures), switching to SPIFFS-only mode", 
+                                     index, printers[index].sd_write_failures);
+                            printers[index].use_spiffs_only = true;
+                        }
+                    }
+                } else if (!is_sdcard) {
+                    // Direct SPIFFS write (no retry needed - more reliable)
+                    FILE* f = fopen(path.c_str(), "w");
+                    if (f) {
+                        size_t written = fwrite(output, 1, len, f);
+                        fclose(f);
+                        if (written == len) {
+                            ESP_LOGI(TAG, "[%d] Cache updated: %s (%zu bytes)", index, path.c_str(), written);
+                            write_success = true;
+                        } else {
+                            ESP_LOGW(TAG, "[%d] Partial write to %s: %zu/%zu bytes", index, path.c_str(), written, len);
+                            storage_health_record_spiffs_error();
+                        }
+                    } else {
+                        int save_errno = errno;
+                        ESP_LOGW(TAG, "[%d] Failed to write cache: %s (errno=%d)", index, path.c_str(), save_errno);
+                        storage_health_record_spiffs_error();
+                    }
+                }
+                
+                // Fallback to SPIFFS if SD write failed or skipped
+                if (!write_success && is_sdcard) {
+                    std::string spiffs_path = std::string(SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
+                    
+                    // Make sure SPIFFS printer directory exists
+                    struct stat st;
+                    if (stat(SPIFFS_PRINTER_PATH, &st) != 0) {
+                        mkdir(SPIFFS_PRINTER_PATH, 0755);
+                    }
+                    
+                    FILE* f = fopen(spiffs_path.c_str(), "w");
+                    if (f) {
+                        size_t written = fwrite(output, 1, len, f);
+                        fclose(f);
+                        if (written == len) {
+                            ESP_LOGI(TAG, "[%d] Cache written to SPIFFS fallback: %s (%zu bytes)", index, spiffs_path.c_str(), written);
+                        } else {
+                            storage_health_record_spiffs_error();
+                        }
+                    } else {
+                        ESP_LOGE(TAG, "[%d] SPIFFS fallback also failed: %s (errno=%d)", index, spiffs_path.c_str(), errno);
+                        storage_health_record_spiffs_error();
                     }
                 }
                 cJSON_free(output);
@@ -498,12 +687,21 @@ int bambu_add_printer(const bambu_printer_config_t* config) {
     mqtt_cfg.credentials.username = "bblp";
     mqtt_cfg.credentials.authentication.password = printer->config.access_code;
     
-    // Optimized buffer sizes for multi-printer (smaller than single)
-    mqtt_cfg.buffer.size = 16384;       // 16KB receive buffer
-    mqtt_cfg.buffer.out_size = 1024;    // 1KB send buffer
+    // Network timeouts (important for cross-subnet connections)
+    mqtt_cfg.network.timeout_ms = 10000;         // 10 second TCP timeout
+    mqtt_cfg.network.refresh_connection_after_ms = 0;  // Disable auto-refresh
+    mqtt_cfg.network.disable_auto_reconnect = false;
+    
+    // Aggressively optimized buffer sizes for 3 printers (prevent memory exhaustion)
+    mqtt_cfg.buffer.size = 6144;        // 6KB receive buffer (fragmentation handles larger messages)
+    mqtt_cfg.buffer.out_size = 384;     // 384B send buffer (queries ~100-150 bytes)
     mqtt_cfg.task.priority = 3;         // Lower priority
-    mqtt_cfg.task.stack_size = 8192;    // 8KB stack per printer
+    mqtt_cfg.task.stack_size = 3072;    // 3KB stack per printer (reduced to save memory)
     mqtt_cfg.session.keepalive = 60;
+    
+    ESP_LOGI(TAG, "Configuring MQTT for %s at %s:%d (stack: %d, heap free: %ld)", 
+             config->device_id, printer->config.ip_address, printer->config.port,
+             mqtt_cfg.task.stack_size, esp_get_free_heap_size());
     
     printer->mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
     if (!printer->mqtt_client) {
@@ -545,6 +743,14 @@ esp_err_t bambu_remove_printer(int index) {
     if (printer->last_status) {
         cJSON_Delete(printer->last_status);
         printer->last_status = NULL;
+    }
+    
+    // Free data buffer
+    if (printer->data_buffer) {
+        free(printer->data_buffer);
+        printer->data_buffer = NULL;
+        printer->buffer_len = 0;
+        printer->buffer_size = 0;
     }
     
     // Free config
@@ -620,8 +826,8 @@ esp_err_t bambu_monitor_start(void) {
             // Stagger connection starts to avoid concurrent TLS buffer allocations
             // Each TLS handshake requires ~17KB temporary buffer
             if (started > 0) {
-                ESP_LOGI(TAG, "Waiting 3 seconds before starting next printer connection...");
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                ESP_LOGI(TAG, "Waiting 8 seconds before starting next printer connection...");
+                vTaskDelay(pdMS_TO_TICKS(8000));  // Increased from 3s to allow full TLS buffer deallocation
             }
             if (bambu_start_printer(i) == ESP_OK) {
                 started++;
@@ -639,6 +845,40 @@ esp_err_t bambu_start_printer(int index) {
     
     if (!printers[index].mqtt_client) {
         return ESP_ERR_INVALID_STATE;
+    }
+    
+    // Manage connection pool before starting new connection
+    manage_connection_pool();
+    
+    // Test TCP connectivity before starting MQTT
+    ESP_LOGI(TAG, "[%d] Testing connectivity to %s:%d...", 
+             index, printers[index].config.ip_address, printers[index].config.port);
+    
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock >= 0) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(printers[index].config.port);
+        inet_pton(AF_INET, printers[index].config.ip_address, &dest_addr.sin_addr);
+        
+        // Set short timeout for connectivity test
+        struct timeval timeout;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+        if (err != 0) {
+            ESP_LOGW(TAG, "[%d] TCP connect test failed to %s:%d (errno=%d: %s)", 
+                     index, printers[index].config.ip_address, printers[index].config.port, 
+                     errno, strerror(errno));
+            ESP_LOGW(TAG, "[%d] Check: 1) Printer powered on, 2) Network routing, 3) Firewall rules", index);
+        } else {
+            ESP_LOGI(TAG, "[%d] TCP connect test successful to %s:%d", 
+                     index, printers[index].config.ip_address, printers[index].config.port);
+        }
+        close(sock);
     }
     
     ESP_LOGI(TAG, "[%d] Starting MQTT connection to %s", index, printers[index].config.ip_address);
@@ -664,9 +904,26 @@ esp_err_t bambu_send_query_index(int index) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    if (!printers[index].mqtt_client || !printers[index].connected) {
+    // If not connected, try to connect (will manage pool automatically)
+    if (!printers[index].connected) {
+        ESP_LOGI(TAG, "[%d] Not connected, attempting to start connection for query", index);
+        esp_err_t ret = bambu_start_printer(index);
+        if (ret != ESP_OK) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        // Wait a bit for connection to establish
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (!printers[index].connected) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    
+    if (!printers[index].mqtt_client) {
         return ESP_ERR_INVALID_STATE;
     }
+    
+    // Update activity timestamp (keep this connection alive)
+    time(&printers[index].last_activity);
     
     char topic[128];
     snprintf(topic, sizeof(topic), "device/%s/request", printers[index].config.device_id);
@@ -722,4 +979,136 @@ bool bambu_is_printer_active(int index) {
         return false;
     }
     return printers[index].active;
+}
+
+/**
+ * @brief HTTP event handler for snapshot download
+ */
+static esp_err_t snapshot_http_event_handler(esp_http_client_event_t *evt) {
+    FILE** file_ptr = (FILE**)evt->user_data;
+    
+    switch(evt->event_id) {
+        case HTTP_EVENT_ON_DATA:
+            if (*file_ptr && evt->data_len > 0) {
+                fwrite(evt->data, 1, evt->data_len, *file_ptr);
+            }
+            break;
+        default:
+            break;
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief Capture a snapshot from printer camera
+ */
+esp_err_t bambu_capture_snapshot(int index, const char* custom_path) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        ESP_LOGE(TAG, "Invalid printer index for snapshot: %d", index);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    // Build snapshot URL: http://IP/snapshot.cgi?user=bblp&pwd=ACCESS_CODE
+    char url[256];
+    snprintf(url, sizeof(url), "http://%s/snapshot.cgi?user=bblp&pwd=%s",
+             printers[index].config.ip_address,
+             printers[index].config.access_code);
+    
+    // Generate save path
+    char save_path[256];
+    if (custom_path) {
+        strncpy(save_path, custom_path, sizeof(save_path) - 1);
+    } else {
+        // Auto-generate: /sdcard/snapshots/<serial>_<timestamp>.jpg
+        time_t now;
+        time(&now);
+        
+        // Try SD card first
+        bool use_sd = is_sdcard_available() && !printers[index].use_spiffs_only;
+        const char* base_dir = use_sd ? "/sdcard/snapshots" : "/spiffs/snapshots";
+        
+        // Create snapshots directory
+        struct stat st;
+        if (stat(base_dir, &st) != 0) {
+            mkdir(base_dir, 0755);
+        }
+        
+        // Use fixed filename (overwrite previous snapshot to save space)
+        snprintf(save_path, sizeof(save_path), "%s/%s.jpg",
+                 base_dir,
+                 printers[index].config.device_id);
+    }
+    
+    ESP_LOGI(TAG, "[%d] Capturing snapshot from %s", index, printers[index].config.ip_address);
+    ESP_LOGI(TAG, "[%d] Snapshot URL: %s", index, url);
+    ESP_LOGI(TAG, "[%d] Save path: %s", index, save_path);
+    
+    // Open file for writing
+    FILE* snapshot_file = fopen(save_path, "wb");
+    if (!snapshot_file) {
+        ESP_LOGE(TAG, "[%d] Failed to open %s for writing (errno=%d)", index, save_path, errno);
+        return ESP_FAIL;
+    }
+    
+    // Configure HTTP client
+    esp_http_client_config_t config = {};
+    config.url = url;
+    config.event_handler = snapshot_http_event_handler;
+    config.user_data = &snapshot_file;
+    config.timeout_ms = 15000;  // 15 second timeout
+    config.buffer_size = 4096;  // 4KB buffer for JPEG streaming
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "[%d] Failed to initialize HTTP client", index);
+        fclose(snapshot_file);
+        unlink(save_path);
+        return ESP_FAIL;
+    }
+    
+    // Perform HTTP GET
+    esp_err_t err = esp_http_client_perform(client);
+    fclose(snapshot_file);
+    
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        int content_length = esp_http_client_get_content_length(client);
+        
+        if (status_code == 200 && content_length > 0) {
+            // Verify file was written
+            struct stat st;
+            if (stat(save_path, &st) == 0 && st.st_size > 0) {
+                ESP_LOGI(TAG, "[%d] Snapshot saved: %s (%lld bytes)", index, save_path, (long long)st.st_size);
+                strncpy(printers[index].last_snapshot_path, save_path, sizeof(printers[index].last_snapshot_path) - 1);
+                esp_http_client_cleanup(client);
+                return ESP_OK;
+            } else {
+                ESP_LOGW(TAG, "[%d] Snapshot file empty or unreadable", index);
+            }
+        } else {
+            ESP_LOGW(TAG, "[%d] HTTP request failed: status=%d, length=%d", index, status_code, content_length);
+        }
+    } else {
+        ESP_LOGE(TAG, "[%d] HTTP GET failed: %s", index, esp_err_to_name(err));
+    }
+    
+    // Cleanup on failure
+    esp_http_client_cleanup(client);
+    unlink(save_path);  // Delete failed/empty file
+    return ESP_FAIL;
+}
+
+/**
+ * @brief Get the last captured snapshot path for a printer
+ */
+const char* bambu_get_last_snapshot_path(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return NULL;
+    }
+    
+    if (printers[index].last_snapshot_path[0] == '\0') {
+        return NULL;
+    }
+    
+    return printers[index].last_snapshot_path;
 }

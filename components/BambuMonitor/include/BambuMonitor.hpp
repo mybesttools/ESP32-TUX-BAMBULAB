@@ -190,6 +190,28 @@ bool bambu_is_printer_active(int index);
  */
 void bambu_reset_sdcard_check(void);
 
+/**
+ * @brief Capture a snapshot from printer camera
+ * 
+ * Downloads a JPEG snapshot from the printer's built-in camera and saves it to storage.
+ * Snapshots are saved to /sdcard/snapshots/<serial>_<timestamp>.jpg or SPIFFS fallback.
+ * 
+ * URL format: http://<printer_ip>/snapshot.cgi?user=bblp&pwd=<access_code>
+ * 
+ * @param index Printer index (0-5)
+ * @param save_path Optional custom save path (NULL for auto-generated path)
+ * @return ESP_OK on success, ESP_FAIL on error
+ */
+esp_err_t bambu_capture_snapshot(int index, const char* save_path);
+
+/**
+ * @brief Get the last captured snapshot path for a printer
+ * 
+ * @param index Printer index (0-5)
+ * @return Path to last snapshot or NULL if none
+ */
+const char* bambu_get_last_snapshot_path(int index);
+
 #ifdef __cplusplus
 }
 #endif
