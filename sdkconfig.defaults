@@ -18,5 +18,9 @@ CONFIG_FATFS_LFN_HEAP=y
 # Disable certificate bundle (we use printer's self-signed cert)
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
 
-# LVGL configuration
+# LVGL configuration - use custom lv_conf.h
 # CONFIG_LV_CONF_SKIP is not set
+
+# LVGL extras required by the application
+CONFIG_LV_USE_MSG=y
+CONFIG_LV_USE_MSGBOX=y
