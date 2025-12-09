@@ -54,3 +54,34 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 
 # Disable hardware AES to avoid internal RAM DMA exhaustion
 CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# =============================================================================
+# Common Settings
+# =============================================================================
+# Compiler optimization
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_PERIPH_CTRL_FUNC_IN_IRAM=y
+
+# Timezone
+CONFIG_TIMEZONE_STRING="WET0WEST,M3.5.0/1,M10.5.0/2"
+
+# TLS settings for Bambu printer connections (self-signed certs)
+CONFIG_ESP_TLS_INSECURE=y
+CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
+
+# Disable certificate bundle (we use printer's self-signed cert)
+# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+
+# =============================================================================
+# LVGL Configuration
+# =============================================================================
+# Use custom lv_conf.h
+# CONFIG_LV_CONF_SKIP is not set
+
+# LVGL extras required by the application
+CONFIG_LV_USE_MSG=y
+CONFIG_LV_USE_MSGBOX=y
+CONFIG_LV_USE_SNAPSHOT=y
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_COLOR_DEPTH=16
+CONFIG_LV_FONT_MONTSERRAT_14=y
