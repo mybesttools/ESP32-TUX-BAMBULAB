@@ -1,26 +1,85 @@
+# =============================================================================
+# WT32-SC01-Plus (ESP32-S3) Device Configuration
+# =============================================================================
+
+# Device selection - disable all others, enable WT32-SC01-Plus
+CONFIG_TUX_DEVICE_WT32_SC01=n
+CONFIG_TUX_DEVICE_WT32_SC01_PLUS=y
+CONFIG_TUX_DEVICE_MAKERFABS35=n
+CONFIG_TUX_DEVICE_MAKERFABS35_S3=n
+CONFIG_TUX_DEVICE_MAKERFABS43_S3=n
+
+# Flash size: 8MB
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Use custom 8MB partition table with SPIFFS storage and OTA
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/partition-8MB.csv"
+
+# =============================================================================
+# SPIRAM Configuration
+# Uses QUAD mode at 40MHz (NOT OCT/80MHz - device doesn't boot with OCT)
+# =============================================================================
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MEMTEST=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 # Reserve more internal RAM for DMA operations (default 32768, increase for multi-TLS)
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 
-# Optimal clock configuration for ESP32-S3 with PSRAM
+# PSRAM Clock and CS IO for ESP32S3
+CONFIG_DEFAULT_PSRAM_CLK_IO=30
+CONFIG_DEFAULT_PSRAM_CS_IO=26
+
+# =============================================================================
+# Clock Configuration
+# Flash: 80MHz, SPIRAM: 40MHz, CPU: 240MHz
+# =============================================================================
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHFREQ="80m"
+CONFIG_SPIRAM_SPEED=40
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ=240
 
 # Enable FAT long filenames for SD card (printer serials are 15+ chars)
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 
-# mbedTLS: Use PSRAM (external memory) for TLS buffers
+# =============================================================================
+# mbedTLS Configuration for Multi-Printer TLS/MQTT Connections
+# =============================================================================
+# Use PSRAM (external memory) for TLS buffers
 # Critical for multi-printer MQTT connections - each TLS session needs ~17KB
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Asymmetric content length: large input buffer, smaller output buffer
+# Reduces memory usage while supporting large server certificates
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048
+
+# Dynamic buffer allocation - allocates TLS buffers only when needed
+# Frees memory during idle periods between TLS operations
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 
 # Disable hardware AES - uses internal RAM for DMA which can exhaust with multiple TLS connections
 # Software AES is slightly slower but allocates from PSRAM (via MBEDTLS_EXTERNAL_MEM_ALLOC)
 # See: https://github.com/espressif/esp-idf/issues/9935
 CONFIG_MBEDTLS_HARDWARE_AES=n
+
+# Enable hardware acceleration for SHA and MPI (these don't conflict with PSRAM)
+CONFIG_MBEDTLS_HARDWARE_MPI=y
+CONFIG_MBEDTLS_MPI_USE_INTERRUPT=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
 
 
