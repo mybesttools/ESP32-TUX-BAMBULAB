@@ -4,10 +4,6 @@
  * 
  * Supports up to 6 simultaneous MQTT connections to Bambu Lab printers.
  * Each printer has its own MQTT client, state, and cache file.
- * 
- * Camera snapshot support:
- * - P1P, P1S, A1, A1 Mini: Port 6000 SSL MJPEG stream (live camera)
- * - X1, X1C, X1E: FTP thumbnails from SD card (no live stream support on ESP32)
  */
 
 #include "BambuMonitor.hpp"
@@ -18,14 +14,12 @@
 #include "cJSON.h"
 #include <cstring>
 #include <string>
-#include <algorithm>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <dirent.h>
 
 // Storage health monitoring functions (implemented in main/helpers/helper_storage_health.c)
 extern "C" {
@@ -38,34 +32,6 @@ static const char* TAG = "BambuMonitor";
 // Storage paths - prefer SD card over SPIFFS
 #define SDCARD_PRINTER_PATH "/sdcard/printer"
 #define SPIFFS_PRINTER_PATH "/spiffs/printer"
-
-// Camera capture ports
-#define BAMBU_CAMERA_PORT 6000      // Port 6000 SSL for A1/P1 series (MJPEG stream)
-#define BAMBU_FTP_PORT 990          // FTP over TLS for X1 series (thumbnails only)
-
-// Printer type detection based on serial number prefix
-// Serial format: XXXYYYYYYYYYYYY (15 chars, first 3 identify model)
-// Source: https://wiki.bambulab.com/en/general/find-sn
-typedef enum {
-    BAMBU_MODEL_UNKNOWN = 0,
-    // X1 Series - use RTSP camera (H.264, not suitable for ESP32)
-    BAMBU_MODEL_X1,         // 00W - X1
-    BAMBU_MODEL_X1C,        // 00M - X1 Carbon  
-    BAMBU_MODEL_X1E,        // 03W - X1E
-    // P1 Series - use Port 6000 SSL camera (MJPEG)
-    BAMBU_MODEL_P1P,        // 01P - P1P
-    BAMBU_MODEL_P1S,        // 01S - P1S
-    // P2 Series - use RTSP camera
-    BAMBU_MODEL_P2S,        // 22E - P2S
-    // A1 Series - use Port 6000 SSL camera (MJPEG)
-    BAMBU_MODEL_A1,         // 039 - A1
-    BAMBU_MODEL_A1_MINI,    // 030 - A1 Mini
-    // H2 Series - use RTSP camera (FTP thumbnails as fallback)
-    BAMBU_MODEL_H2D,        // 094 - H2D
-    BAMBU_MODEL_H2D_PRO,    // 239 - H2D Pro
-    BAMBU_MODEL_H2S,        // 093 - H2S
-    BAMBU_MODEL_H2C,        // TBD - H2C (newest, prefix unknown - assume same as H2D family)
-} bambu_model_t;
 
 // SD card availability cache
 static int sdcard_available = -1;  // -1 = not checked, 0 = not available, 1 = available
@@ -94,11 +60,13 @@ static printer_slot_t printers[BAMBU_MAX_PRINTERS] = {0};
 static esp_event_handler_t registered_handler = NULL;
 static bool monitor_initialized = false;
 
-// Connection management - connect/get-data/disconnect pattern
-// Only 1 active connection at a time to save memory (~25KB per TLS connection)
-#define MAX_CONCURRENT_CONNECTIONS 1
+// Connection pool management (max 2 concurrent MQTT connections)
+#define MAX_CONCURRENT_CONNECTIONS 2
 static int active_connection_count = 0;
-static int next_printer_index = 0;  // Round-robin index for printer rotation
+
+// Round-robin rotation for fair printer updates
+static int rotation_index = 0;  // Next printer to rotate in
+#define STALE_THRESHOLD_SECONDS 30  // Rotate in printers not updated for this long
 
 // Embedded Bambu Lab root certificates
 extern const uint8_t bambu_cert_start[] asm("_binary_bambu_combined_cert_start");
@@ -182,106 +150,6 @@ void bambu_reset_sdcard_check(void) {
 }
 
 /**
- * @brief Detect printer model from serial number prefix
- * 
- * Bambu serial numbers start with a model code:
- * - 00W: X1
- * - 00M: X1 Carbon
- * - 03W: X1E
- * - 01P: P1P  
- * - 01S: P1S
- * - 039: A1
- * - 030: A1 Mini
- * - 094: H2D
- */
-static bambu_model_t detect_printer_model(const char* serial) {
-    if (!serial || strlen(serial) < 3) {
-        return BAMBU_MODEL_UNKNOWN;
-    }
-    
-    // Check first 3 characters of serial (from wiki.bambulab.com)
-    // X1 Series
-    if (strncmp(serial, "00W", 3) == 0) return BAMBU_MODEL_X1;
-    if (strncmp(serial, "00M", 3) == 0) return BAMBU_MODEL_X1C;
-    if (strncmp(serial, "03W", 3) == 0) return BAMBU_MODEL_X1E;
-    // P1 Series
-    if (strncmp(serial, "01P", 3) == 0) return BAMBU_MODEL_P1P;
-    if (strncmp(serial, "01S", 3) == 0) return BAMBU_MODEL_P1S;
-    // P2 Series
-    if (strncmp(serial, "22E", 3) == 0) return BAMBU_MODEL_P2S;
-    // A1 Series
-    if (strncmp(serial, "039", 3) == 0) return BAMBU_MODEL_A1;
-    if (strncmp(serial, "030", 3) == 0) return BAMBU_MODEL_A1_MINI;
-    // H2 Series
-    if (strncmp(serial, "094", 3) == 0) return BAMBU_MODEL_H2D;
-    if (strncmp(serial, "239", 3) == 0) return BAMBU_MODEL_H2D_PRO;
-    if (strncmp(serial, "093", 3) == 0) return BAMBU_MODEL_H2S;
-    // H2C prefix not yet documented - will map to UNKNOWN for now
-    
-    // Try 2-character prefix for older serials
-    if (strncmp(serial, "01", 2) == 0) return BAMBU_MODEL_P1P;  // Assume P1P for 01* prefix
-    if (strncmp(serial, "00", 2) == 0) return BAMBU_MODEL_X1C;  // Assume X1C for 00* prefix
-    if (strncmp(serial, "03", 2) == 0) return BAMBU_MODEL_A1;   // Assume A1 for 03* prefix
-    if (strncmp(serial, "09", 2) == 0) return BAMBU_MODEL_H2D;  // Assume H2D for 09* prefix
-    if (strncmp(serial, "22", 2) == 0) return BAMBU_MODEL_P2S;  // Assume P2S for 22* prefix
-    if (strncmp(serial, "23", 2) == 0) return BAMBU_MODEL_H2D_PRO; // Assume H2D Pro for 23* prefix
-    
-    return BAMBU_MODEL_UNKNOWN;
-}
-
-/**
- * @brief Check if printer model supports port 6000 camera stream (MJPEG)
- * 
- * Port 6000 SSL works for: A1, A1 Mini, P1P, P1S
- * X1/X1C/X1E use RTSP which requires H.264 decoding (not suitable for ESP32)
- */
-static bool supports_port6000_camera(bambu_model_t model) {
-    switch (model) {
-        // A1 and P1 series support MJPEG on port 6000 SSL
-        case BAMBU_MODEL_A1:
-        case BAMBU_MODEL_A1_MINI:
-        case BAMBU_MODEL_P1P:
-        case BAMBU_MODEL_P1S:
-            return true;
-        // X1 series uses RTSP (H.264) - not supported on ESP32
-        case BAMBU_MODEL_X1:
-        case BAMBU_MODEL_X1C:
-        case BAMBU_MODEL_X1E:
-        // P2 series uses RTSP (H.264) - not supported on ESP32
-        case BAMBU_MODEL_P2S:
-        // H2 series uses RTSP (H.264) - not supported on ESP32
-        case BAMBU_MODEL_H2D:
-        case BAMBU_MODEL_H2D_PRO:
-        case BAMBU_MODEL_H2S:
-        case BAMBU_MODEL_H2C:
-        case BAMBU_MODEL_UNKNOWN:
-        default:
-            return false;
-    }
-}
-
-/**
- * @brief Get model name string for logging
- */
-static const char* get_model_name(bambu_model_t model) {
-    switch (model) {
-        case BAMBU_MODEL_X1: return "X1";
-        case BAMBU_MODEL_X1C: return "X1C";
-        case BAMBU_MODEL_X1E: return "X1E";
-        case BAMBU_MODEL_P1P: return "P1P";
-        case BAMBU_MODEL_P1S: return "P1S";
-        case BAMBU_MODEL_P2S: return "P2S";
-        case BAMBU_MODEL_A1: return "A1";
-        case BAMBU_MODEL_A1_MINI: return "A1 Mini";
-        case BAMBU_MODEL_H2D: return "H2D";
-        case BAMBU_MODEL_H2D_PRO: return "H2D Pro";
-        case BAMBU_MODEL_H2S: return "H2S";
-        case BAMBU_MODEL_H2C: return "H2C";
-        default: return "Unknown";
-    }
-}
-
-/**
  * @brief Get cache file path for a printer serial
  */
 static std::string get_printer_cache_path(const char* serial) {
@@ -315,6 +183,39 @@ static int find_printer_by_device_id(const char* device_id) {
         }
     }
     return -1;
+}
+
+/**
+ * @brief Test TCP connectivity to a printer (quick check before MQTT)
+ * @return true if printer is reachable, false otherwise
+ */
+static bool test_tcp_connectivity(int index) {
+    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
+        return false;
+    }
+    
+    bool tcp_reachable = false;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock >= 0) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(printers[index].config.port);
+        inet_pton(AF_INET, printers[index].config.ip_address, &dest_addr.sin_addr);
+        
+        // Set short timeout for connectivity test
+        struct timeval timeout;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+        if (err == 0) {
+            tcp_reachable = true;
+        }
+        close(sock);
+    }
+    return tcp_reachable;
 }
 
 /**
@@ -724,13 +625,6 @@ static void process_printer_data(int index, const char* topic, const char* data,
             }
             cJSON_Delete(mini);
         }
-        
-        // Disconnect after receiving data to free memory for next printer
-        // This implements the connect-get-disconnect rotation pattern
-        ESP_LOGI(TAG, "[%d] Data received and cached, disconnecting to rotate", index);
-        esp_mqtt_client_stop(printer->mqtt_client);
-        printer->connected = false;
-        if (active_connection_count > 0) active_connection_count--;
     }
     
     // Notify handler
@@ -839,7 +733,7 @@ int bambu_add_printer(const bambu_printer_config_t* config) {
     mqtt_cfg.buffer.size = 6144;        // 6KB receive buffer (fragmentation handles larger messages)
     mqtt_cfg.buffer.out_size = 384;     // 384B send buffer (queries ~100-150 bytes)
     mqtt_cfg.task.priority = 3;         // Lower priority
-    mqtt_cfg.task.stack_size = 8192;    // 8KB stack per printer (required for mbedTLS SSL handshake)
+    mqtt_cfg.task.stack_size = 3072;    // 3KB stack per printer (reduced to save memory)
     mqtt_cfg.session.keepalive = 60;
     
     ESP_LOGI(TAG, "Configuring MQTT for %s at %s:%d (stack: %d, heap free: %ld)", 
@@ -990,39 +884,34 @@ esp_err_t bambu_start_printer(int index) {
         return ESP_ERR_INVALID_STATE;
     }
     
-    // Manage connection pool before starting new connection
-    manage_connection_pool();
-    
-    // Test TCP connectivity before starting MQTT
+    // IMPORTANT: Test TCP connectivity FIRST, BEFORE managing connection pool
+    // This prevents disconnecting an LRU printer only to find target is unreachable
     ESP_LOGI(TAG, "[%d] Testing connectivity to %s:%d...", 
              index, printers[index].config.ip_address, printers[index].config.port);
     
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock >= 0) {
-        struct sockaddr_in dest_addr;
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(printers[index].config.port);
-        inet_pton(AF_INET, printers[index].config.ip_address, &dest_addr.sin_addr);
+    bool tcp_reachable = test_tcp_connectivity(index);
+    
+    if (!tcp_reachable) {
+        ESP_LOGW(TAG, "[%d] TCP connect test failed to %s:%d", 
+                 index, printers[index].config.ip_address, printers[index].config.port);
+        ESP_LOGW(TAG, "[%d] Skipping MQTT - printer unreachable. Check: 1) Printer powered on, 2) Network routing, 3) Firewall rules", index);
         
-        // Set short timeout for connectivity test
-        struct timeval timeout;
-        timeout.tv_sec = 5;
-        timeout.tv_usec = 0;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-        
-        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-        if (err != 0) {
-            ESP_LOGW(TAG, "[%d] TCP connect test failed to %s:%d (errno=%d: %s)", 
-                     index, printers[index].config.ip_address, printers[index].config.port, 
-                     errno, strerror(errno));
-            ESP_LOGW(TAG, "[%d] Check: 1) Printer powered on, 2) Network routing, 3) Firewall rules", index);
-        } else {
-            ESP_LOGI(TAG, "[%d] TCP connect test successful to %s:%d", 
-                     index, printers[index].config.ip_address, printers[index].config.port);
+        // Clean up any stale MQTT client state from previous connection attempts
+        // This prevents "select() timeout" errors when printer comes back online
+        if (printers[index].mqtt_client) {
+            esp_mqtt_client_stop(printers[index].mqtt_client);
         }
-        close(sock);
+        printers[index].connected = false;
+        
+        return ESP_ERR_NOT_FOUND;
     }
+    
+    ESP_LOGI(TAG, "[%d] TCP connect test successful to %s:%d", 
+             index, printers[index].config.ip_address, printers[index].config.port);
+    
+    // Now that we know printer is reachable, manage connection pool
+    // This may disconnect an LRU printer to make room
+    manage_connection_pool();
     
     ESP_LOGI(TAG, "[%d] Starting MQTT connection to %s", index, printers[index].config.ip_address);
     return esp_mqtt_client_start(printers[index].mqtt_client);
@@ -1083,47 +972,45 @@ esp_err_t bambu_send_query_index(int index) {
 }
 
 esp_err_t bambu_send_query(void) {
-    // Find the next active printer using round-robin
-    int start_idx = next_printer_index;
-    int checked = 0;
+    int sent = 0;
+    time_t now;
+    time(&now);
     
+    // First, send queries to all connected printers
+    for (int i = 0; i < BAMBU_MAX_PRINTERS; i++) {
+        if (printers[i].active && printers[i].connected) {
+            if (bambu_send_query_index(i) == ESP_OK) {
+                sent++;
+            }
+        }
+    }
+    
+    // Round-robin rotation: find a stale disconnected printer to rotate in
+    // This ensures all printers get updated even with only 2 connection slots
+    int checked = 0;
     while (checked < BAMBU_MAX_PRINTERS) {
-        int idx = (start_idx + checked) % BAMBU_MAX_PRINTERS;
+        int idx = rotation_index;
+        rotation_index = (rotation_index + 1) % BAMBU_MAX_PRINTERS;
         checked++;
         
         if (!printers[idx].active) continue;
+        if (printers[idx].connected) continue;  // Already connected
         
-        // Update rotation index for next call
-        next_printer_index = (idx + 1) % BAMBU_MAX_PRINTERS;
-        
-        // If already connected, just send query
-        if (printers[idx].connected) {
-            ESP_LOGI(TAG, "[%d] Querying connected printer %s", idx, printers[idx].config.device_id);
-            return bambu_send_query_index(idx);
-        }
-        
-        // Not connected - start connection (will auto-disconnect after data received)
-        ESP_LOGI(TAG, "[%d] Connecting to printer %s for data fetch", idx, printers[idx].config.device_id);
-        
-        if (bambu_start_printer(idx) == ESP_OK) {
-            // Wait for connection to establish
-            for (int wait = 0; wait < 10 && !printers[idx].connected; wait++) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-            }
+        // Check if this printer is stale (hasn't been updated recently)
+        time_t age = now - printers[idx].last_update;
+        if (age >= STALE_THRESHOLD_SECONDS) {
+            ESP_LOGI(TAG, "[%d] Printer %s is stale (age=%ld sec), rotating in...", 
+                     idx, printers[idx].config.device_id, (long)age);
             
-            if (printers[idx].connected) {
-                ESP_LOGI(TAG, "[%d] Connected, sending query", idx);
-                return bambu_send_query_index(idx);
-            } else {
-                ESP_LOGW(TAG, "[%d] Connection timeout, will retry next cycle", idx);
+            // This will disconnect LRU printer and connect this one
+            if (bambu_send_query_index(idx) == ESP_OK) {
+                sent++;
+                break;  // Only rotate one printer per cycle to avoid thrashing
             }
         }
-        
-        // Try next printer if this one failed
     }
     
-    ESP_LOGD(TAG, "No active printers to query");
-    return ESP_FAIL;
+    return (sent > 0) ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t bambu_send_command(int index, const char* command) {
@@ -1157,27 +1044,25 @@ bool bambu_is_printer_active(int index) {
 }
 
 /**
- * @brief Check if printer supports real-time camera snapshots
+ * @brief HTTP event handler for snapshot download
  */
-bool bambu_supports_camera(int index) {
-    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
-        return false;
-    }
+static esp_err_t snapshot_http_event_handler(esp_http_client_event_t *evt) {
+    FILE** file_ptr = (FILE**)evt->user_data;
     
-    bambu_model_t model = detect_printer_model(printers[index].config.device_id);
-    return supports_port6000_camera(model);
+    switch(evt->event_id) {
+        case HTTP_EVENT_ON_DATA:
+            if (*file_ptr && evt->data_len > 0) {
+                fwrite(evt->data, 1, evt->data_len, *file_ptr);
+            }
+            break;
+        default:
+            break;
+    }
+    return ESP_OK;
 }
-
-// Forward declaration for FTP snapshot capture
-static esp_err_t capture_snapshot_via_ftp(int index, char* save_path, size_t path_size);
-static esp_err_t capture_snapshot_via_port6000(int index, char* save_path, size_t path_size);
 
 /**
  * @brief Capture a snapshot from printer camera
- * 
- * Uses the appropriate method based on printer model:
- * - A1, A1 Mini, P1P, P1S: Port 6000 SSL MJPEG stream (real-time)
- * - X1, X1C, X1E: FTP thumbnails from SD card (updated every ~5 min during print)
  */
 esp_err_t bambu_capture_snapshot(int index, const char* custom_path) {
     if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
@@ -1185,17 +1070,22 @@ esp_err_t bambu_capture_snapshot(int index, const char* custom_path) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    const char* serial = printers[index].config.device_id;
-    bambu_model_t model = detect_printer_model(serial);
-    
-    ESP_LOGI(TAG, "[%d] Capturing snapshot for %s (%s)", index, serial, get_model_name(model));
+    // Build snapshot URL: http://IP/snapshot.cgi?user=bblp&pwd=ACCESS_CODE
+    char url[256];
+    snprintf(url, sizeof(url), "http://%s/snapshot.cgi?user=bblp&pwd=%s",
+             printers[index].config.ip_address,
+             printers[index].config.access_code);
     
     // Generate save path
     char save_path[256];
     if (custom_path) {
         strncpy(save_path, custom_path, sizeof(save_path) - 1);
-        save_path[sizeof(save_path) - 1] = '\0';
     } else {
+        // Auto-generate: /sdcard/snapshots/<serial>_<timestamp>.jpg
+        time_t now;
+        time(&now);
+        
+        // Try SD card first
         bool use_sd = is_sdcard_available() && !printers[index].use_spiffs_only;
         const char* base_dir = use_sd ? "/sdcard/snapshots" : "/spiffs/snapshots";
         
@@ -1205,419 +1095,69 @@ esp_err_t bambu_capture_snapshot(int index, const char* custom_path) {
             mkdir(base_dir, 0755);
         }
         
-        snprintf(save_path, sizeof(save_path), "%s/%s.jpg", base_dir, serial);
+        // Use fixed filename (overwrite previous snapshot to save space)
+        snprintf(save_path, sizeof(save_path), "%s/%s.jpg",
+                 base_dir,
+                 printers[index].config.device_id);
     }
     
-    esp_err_t result;
+    ESP_LOGI(TAG, "[%d] Capturing snapshot from %s", index, printers[index].config.ip_address);
+    ESP_LOGI(TAG, "[%d] Snapshot URL: %s", index, url);
+    ESP_LOGI(TAG, "[%d] Save path: %s", index, save_path);
     
-    // Choose capture method based on printer model
-    if (supports_port6000_camera(model)) {
-        ESP_LOGI(TAG, "[%d] Using port 6000 MJPEG stream (A1/P1 series)", index);
-        result = capture_snapshot_via_port6000(index, save_path, sizeof(save_path));
-    } else {
-        // X1, P2, and H2 series use RTSP which ESP32 cannot decode
-        // Try FTP thumbnail fallback
-        ESP_LOGI(TAG, "[%d] Model %s uses RTSP camera, trying FTP fallback", index, get_model_name(model));
-        result = capture_snapshot_via_ftp(index, save_path, sizeof(save_path));
-    }
-    
-    if (result == ESP_OK) {
-        strncpy(printers[index].last_snapshot_path, save_path, 
-                sizeof(printers[index].last_snapshot_path) - 1);
-    }
-    
-    return result;
-}
-
-/**
- * @brief Capture snapshot via Port 6000 SSL (for A1/P1 series)
- * 
- * Protocol:
- * 1. Connect via TLS to port 6000
- * 2. Send auth packet: 0x40, 0x3000, 0x00, 0x00, username(32 bytes), access_code(32 bytes)
- * 3. Stream sends continuous JPEG frames with 16-byte headers
- * 4. Extract first complete JPEG (starts with 0xFFD8, ends with 0xFFD9)
- */
-static esp_err_t capture_snapshot_via_port6000(int index, char* save_path, size_t path_size) {
-    const char* hostname = printers[index].config.ip_address;
-    const char* access_code = printers[index].config.access_code;
-    const int port = BAMBU_CAMERA_PORT;
-    
-    ESP_LOGI(TAG, "[%d] Connecting to %s:%d via SSL", index, hostname, port);
-    
-    // Build authentication packet (80 bytes total)
-    // Format: 0x40(4) + 0x3000(4) + 0x00(4) + 0x00(4) + username(32) + access_code(32)
-    uint8_t auth_data[80] = {0};
-    auth_data[0] = 0x40;  // '@'
-    auth_data[4] = 0x00;  // 0x3000 little endian
-    auth_data[5] = 0x30;
-    // bytes 8-15 are zeros
-    
-    // Username "bblp" at offset 16 (32 bytes, zero-padded)
-    const char* username = "bblp";
-    for (size_t i = 0; i < strlen(username) && i < 32; i++) {
-        auth_data[16 + i] = username[i];
-    }
-    
-    // Access code at offset 48 (32 bytes, zero-padded)
-    for (size_t i = 0; i < strlen(access_code) && i < 32; i++) {
-        auth_data[48 + i] = access_code[i];
-    }
-    
-    // Create SSL context
-    esp_tls_cfg_t tls_cfg = {};
-    tls_cfg.skip_common_name = true;  // Bambu certs don't match hostname
-    
-    esp_tls_t* tls = esp_tls_init();
-    if (!tls) {
-        ESP_LOGE(TAG, "[%d] Failed to initialize TLS", index);
-        return ESP_FAIL;
-    }
-    
-    // Connect with timeout
-    int ret = esp_tls_conn_new_sync(hostname, strlen(hostname), port, &tls_cfg, tls);
-    if (ret != 1) {
-        ESP_LOGE(TAG, "[%d] TLS connection failed: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ESP_LOGD(TAG, "[%d] TLS connected, sending auth packet", index);
-    
-    // Send authentication packet
-    size_t written = 0;
-    ret = esp_tls_conn_write(tls, auth_data, sizeof(auth_data));
-    if (ret < 0) {
-        ESP_LOGE(TAG, "[%d] Failed to send auth packet: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ESP_LOGD(TAG, "[%d] Auth sent, reading MJPEG stream for first frame", index);
-    
-    // The A1/P1 printers stream MJPEG - we need to find JPEG start/end markers
-    // Read data and look for JPEG markers: FFD8 (start) ... FFD9 (end)
-    const size_t buffer_size = 65536;  // 64KB buffer for frame
-    uint8_t* buffer = (uint8_t*)malloc(buffer_size);
-    if (!buffer) {
-        ESP_LOGE(TAG, "[%d] Failed to allocate read buffer", index);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    size_t buffer_len = 0;
-    int jpeg_start = -1;
-    int jpeg_end = -1;
-    int timeout_count = 0;
-    const int max_timeout = 50;  // 5 seconds max
-    
-    while (jpeg_end < 0 && timeout_count < max_timeout && buffer_len < buffer_size - 4096) {
-        ret = esp_tls_conn_read(tls, buffer + buffer_len, 4096);
-        
-        if (ret > 0) {
-            buffer_len += ret;
-            timeout_count = 0;
-            
-            // Look for JPEG markers in the buffer
-            if (jpeg_start < 0) {
-                for (size_t i = 0; i < buffer_len - 1; i++) {
-                    if (buffer[i] == 0xFF && buffer[i+1] == 0xD8) {
-                        jpeg_start = i;
-                        ESP_LOGD(TAG, "[%d] Found JPEG start at offset %d", index, jpeg_start);
-                        break;
-                    }
-                }
-            }
-            
-            // Only look for end if we found start
-            if (jpeg_start >= 0) {
-                for (size_t i = jpeg_start + 2; i < buffer_len - 1; i++) {
-                    if (buffer[i] == 0xFF && buffer[i+1] == 0xD9) {
-                        jpeg_end = i + 2;  // Include the end marker
-                        ESP_LOGD(TAG, "[%d] Found JPEG end at offset %d", index, jpeg_end);
-                        break;
-                    }
-                }
-            }
-        } else if (ret == 0) {
-            ESP_LOGW(TAG, "[%d] Connection closed", index);
-            break;
-        } else if (ret == ESP_TLS_ERR_SSL_WANT_READ || ret == ESP_TLS_ERR_SSL_WANT_WRITE) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            timeout_count++;
-        } else {
-            ESP_LOGE(TAG, "[%d] Error reading: %d", index, ret);
-            break;
-        }
-    }
-    
-    esp_tls_conn_destroy(tls);
-    
-    // Check if we found a complete JPEG
-    if (jpeg_start < 0 || jpeg_end < 0) {
-        ESP_LOGE(TAG, "[%d] No complete JPEG frame found (start=%d, end=%d, buffered=%zu)", 
-                 index, jpeg_start, jpeg_end, buffer_len);
-        free(buffer);
-        return ESP_FAIL;
-    }
-    
-    size_t jpeg_size = jpeg_end - jpeg_start;
-    ESP_LOGI(TAG, "[%d] Extracted JPEG frame: %zu bytes", index, jpeg_size);
-    
-    // Write JPEG to file
+    // Open file for writing
     FILE* snapshot_file = fopen(save_path, "wb");
     if (!snapshot_file) {
         ESP_LOGE(TAG, "[%d] Failed to open %s for writing (errno=%d)", index, save_path, errno);
-        free(buffer);
         return ESP_FAIL;
     }
     
-    written = fwrite(buffer + jpeg_start, 1, jpeg_size, snapshot_file);
-    fclose(snapshot_file);
-    free(buffer);
+    // Configure HTTP client
+    esp_http_client_config_t config = {};
+    config.url = url;
+    config.event_handler = snapshot_http_event_handler;
+    config.user_data = &snapshot_file;
+    config.timeout_ms = 15000;  // 15 second timeout
+    config.buffer_size = 4096;  // 4KB buffer for JPEG streaming
     
-    if (written != jpeg_size) {
-        ESP_LOGE(TAG, "[%d] Write failed: %zu of %zu bytes", index, written, jpeg_size);
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "[%d] Failed to initialize HTTP client", index);
+        fclose(snapshot_file);
         unlink(save_path);
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "[%d] Snapshot saved: %s (%zu bytes)", index, save_path, jpeg_size);
-    return ESP_OK;
-}
-
-/**
- * @brief Capture snapshot via FTP (for X1 series)
- * 
- * X1/X1C/X1E printers don't support the port 6000 MJPEG protocol.
- * Instead, we grab thumbnails from the SD card via FTP:
- * - /ipcam/thumbnail/<timestamp>.jpg - Camera recording thumbnails (updated every ~5 min)
- * - /timelapse/thumbnail/<name>.jpg - Timelapse thumbnails
- * 
- * FTP requires:
- * - Port 990 implicit FTPS
- * - Auth: bblp / access_code
- * - SSL session reuse for data connections
- */
-static esp_err_t capture_snapshot_via_ftp(int index, char* save_path, size_t path_size) {
-    const char* hostname = printers[index].config.ip_address;
-    const char* access_code = printers[index].config.access_code;
-    const char* serial = printers[index].config.device_id;
+    // Perform HTTP GET
+    esp_err_t err = esp_http_client_perform(client);
+    fclose(snapshot_file);
     
-    ESP_LOGI(TAG, "[%d] FTP snapshot from %s (X1/H2 series)", index, hostname);
-    
-    // Connect to FTP control channel on port 990 (implicit FTPS)
-    esp_tls_cfg_t tls_cfg = {
-        .skip_common_name = true,
-    };
-    
-    esp_tls_t *tls = esp_tls_init();
-    if (!tls) {
-        ESP_LOGE(TAG, "[%d] Failed to create TLS context", index);
-        return ESP_FAIL;
-    }
-    
-    int ret = esp_tls_conn_new_sync(hostname, strlen(hostname), BAMBU_FTP_PORT, &tls_cfg, tls);
-    if (ret != 1) {
-        ESP_LOGE(TAG, "[%d] FTP TLS connection failed: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ESP_LOGI(TAG, "[%d] FTP connected to port 990", index);
-    
-    // Read welcome banner
-    char response[512];
-    ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-    if (ret <= 0) {
-        ESP_LOGE(TAG, "[%d] Failed to read FTP banner: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    response[ret] = '\0';
-    ESP_LOGD(TAG, "[%d] FTP banner: %s", index, response);
-    
-    // Send USER command
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "USER bblp\r\n");
-    ret = esp_tls_conn_write(tls, cmd, strlen(cmd));
-    if (ret < 0) {
-        ESP_LOGE(TAG, "[%d] Failed to send USER: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-    if (ret <= 0) {
-        ESP_LOGE(TAG, "[%d] No response to USER: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    response[ret] = '\0';
-    ESP_LOGD(TAG, "[%d] USER response: %s", index, response);
-    
-    // Send PASS command (access code)
-    snprintf(cmd, sizeof(cmd), "PASS %s\r\n", access_code);
-    ret = esp_tls_conn_write(tls, cmd, strlen(cmd));
-    if (ret < 0) {
-        ESP_LOGE(TAG, "[%d] Failed to send PASS: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-    if (ret <= 0 || response[0] != '2') {
-        ESP_LOGE(TAG, "[%d] FTP login failed: %.*s", index, ret > 0 ? ret : 0, response);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    response[ret] = '\0';
-    ESP_LOGI(TAG, "[%d] FTP logged in: %s", index, response);
-    
-    // Set binary mode
-    snprintf(cmd, sizeof(cmd), "TYPE I\r\n");
-    esp_tls_conn_write(tls, cmd, strlen(cmd));
-    ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-    if (ret > 0) {
-        response[ret] = '\0';
-        ESP_LOGD(TAG, "[%d] TYPE I: %s", index, response);
-    }
-    
-    // Enter passive mode
-    snprintf(cmd, sizeof(cmd), "PASV\r\n");
-    ret = esp_tls_conn_write(tls, cmd, strlen(cmd));
-    if (ret < 0) {
-        ESP_LOGE(TAG, "[%d] Failed to send PASV: %d", index, ret);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-    if (ret <= 0 || response[0] != '2') {
-        ESP_LOGE(TAG, "[%d] PASV failed: %.*s", index, ret > 0 ? ret : 0, response);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    response[ret] = '\0';
-    ESP_LOGD(TAG, "[%d] PASV response: %s", index, response);
-    
-    // Parse PASV response: 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)
-    int h1, h2, h3, h4, p1, p2;
-    char* pasv_start = strchr(response, '(');
-    if (!pasv_start || sscanf(pasv_start, "(%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2) != 6) {
-        ESP_LOGE(TAG, "[%d] Failed to parse PASV response", index);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    int data_port = p1 * 256 + p2;
-    ESP_LOGI(TAG, "[%d] PASV data port: %d", index, data_port);
-    
-    // Connect data channel with SSL (session reuse is tricky, try without first)
-    esp_tls_t *data_tls = esp_tls_init();
-    if (!data_tls) {
-        ESP_LOGE(TAG, "[%d] Failed to create data TLS context", index);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    ret = esp_tls_conn_new_sync(hostname, strlen(hostname), data_port, &tls_cfg, data_tls);
-    if (ret != 1) {
-        ESP_LOGE(TAG, "[%d] Data TLS connection failed: %d", index, ret);
-        esp_tls_conn_destroy(data_tls);
-        esp_tls_conn_destroy(tls);
-        return ESP_FAIL;
-    }
-    
-    // Request thumbnail file - try common paths
-    // The latest thumbnail is usually at /ipcam/thumbnail/
-    const char* thumbnail_paths[] = {
-        "/timelapse/video.mp4.jpg",     // Latest timelapse thumbnail
-        "/ipcam/thumbnail.jpg",          // Direct camera thumbnail
-    };
-    
-    esp_err_t result = ESP_FAIL;
-    
-    for (int path_idx = 0; path_idx < sizeof(thumbnail_paths) / sizeof(thumbnail_paths[0]); path_idx++) {
-        ESP_LOGI(TAG, "[%d] Trying RETR %s", index, thumbnail_paths[path_idx]);
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        int content_length = esp_http_client_get_content_length(client);
         
-        snprintf(cmd, sizeof(cmd), "RETR %s\r\n", thumbnail_paths[path_idx]);
-        ret = esp_tls_conn_write(tls, cmd, strlen(cmd));
-        if (ret < 0) {
-            continue;
-        }
-        
-        // Read response (125 or 150 means transfer starting)
-        ret = esp_tls_conn_read(tls, response, sizeof(response) - 1);
-        if (ret <= 0) {
-            continue;
-        }
-        response[ret] = '\0';
-        ESP_LOGD(TAG, "[%d] RETR response: %s", index, response);
-        
-        if (response[0] != '1') {
-            // File not found, try next
-            continue;
-        }
-        
-        // Read file data from data connection
-        const size_t buffer_size = 65536;
-        uint8_t* buffer = (uint8_t*)malloc(buffer_size);
-        if (!buffer) {
-            ESP_LOGE(TAG, "[%d] Failed to allocate buffer", index);
-            break;
-        }
-        
-        size_t total_read = 0;
-        int timeout_count = 0;
-        
-        while (timeout_count < 30 && total_read < buffer_size) {
-            ret = esp_tls_conn_read(data_tls, buffer + total_read, buffer_size - total_read);
-            if (ret > 0) {
-                total_read += ret;
-                timeout_count = 0;
-            } else if (ret == 0) {
-                // Connection closed - transfer complete
-                break;
-            } else if (ret == ESP_TLS_ERR_SSL_WANT_READ || ret == ESP_TLS_ERR_SSL_WANT_WRITE) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-                timeout_count++;
+        if (status_code == 200 && content_length > 0) {
+            // Verify file was written
+            struct stat st;
+            if (stat(save_path, &st) == 0 && st.st_size > 0) {
+                ESP_LOGI(TAG, "[%d] Snapshot saved: %s (%lld bytes)", index, save_path, (long long)st.st_size);
+                strncpy(printers[index].last_snapshot_path, save_path, sizeof(printers[index].last_snapshot_path) - 1);
+                esp_http_client_cleanup(client);
+                return ESP_OK;
             } else {
-                ESP_LOGE(TAG, "[%d] Data read error: %d", index, ret);
-                break;
+                ESP_LOGW(TAG, "[%d] Snapshot file empty or unreadable", index);
             }
+        } else {
+            ESP_LOGW(TAG, "[%d] HTTP request failed: status=%d, length=%d", index, status_code, content_length);
         }
-        
-        ESP_LOGI(TAG, "[%d] FTP read %zu bytes", index, total_read);
-        
-        // Check if we got valid JPEG data
-        if (total_read > 100 && buffer[0] == 0xFF && buffer[1] == 0xD8) {
-            // Valid JPEG, save it
-            FILE* f = fopen(save_path, "wb");
-            if (f) {
-                fwrite(buffer, 1, total_read, f);
-                fclose(f);
-                ESP_LOGI(TAG, "[%d] FTP snapshot saved: %s (%zu bytes)", index, save_path, total_read);
-                result = ESP_OK;
-            }
-        }
-        
-        free(buffer);
-        break;
+    } else {
+        ESP_LOGE(TAG, "[%d] HTTP GET failed: %s", index, esp_err_to_name(err));
     }
     
-    // Cleanup
-    esp_tls_conn_destroy(data_tls);
-    
-    // Send QUIT
-    snprintf(cmd, sizeof(cmd), "QUIT\r\n");
-    esp_tls_conn_write(tls, cmd, strlen(cmd));
-    esp_tls_conn_destroy(tls);
-    
-    if (result != ESP_OK) {
-        ESP_LOGW(TAG, "[%d] FTP snapshot not available (printer may not be printing)", index);
-    }
-    
-    return result;
+    // Cleanup on failure
+    esp_http_client_cleanup(client);
+    unlink(save_path);  // Delete failed/empty file
+    return ESP_FAIL;
 }
 
 /**
@@ -1633,95 +1173,4 @@ const char* bambu_get_last_snapshot_path(int index) {
     }
     
     return printers[index].last_snapshot_path;
-}
-
-/**
- * @brief Delete the snapshot for a printer (clear when idle at 0%)
- */
-esp_err_t bambu_delete_snapshot(int index) {
-    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    
-    if (printers[index].last_snapshot_path[0] != '\0') {
-        // Delete the file
-        if (unlink(printers[index].last_snapshot_path) == 0) {
-            ESP_LOGI(TAG, "[%d] Deleted snapshot: %s", index, printers[index].last_snapshot_path);
-        } else {
-            ESP_LOGW(TAG, "[%d] Failed to delete snapshot: %s (errno=%d)", 
-                     index, printers[index].last_snapshot_path, errno);
-        }
-        // Clear path regardless
-        printers[index].last_snapshot_path[0] = '\0';
-    }
-    
-    return ESP_OK;
-}
-
-/**
- * @brief Get printer progress percentage from cache file
- * 
- * @param index Printer index
- * @param state_out Optional: pointer to store printer state string
- * @return Progress percentage (0-100), or -1 on error
- */
-int bambu_get_printer_progress(int index, const char** state_out) {
-    if (index < 0 || index >= BAMBU_MAX_PRINTERS || !printers[index].active) {
-        return -1;
-    }
-    
-    // Get cache file path
-    std::string cache_path = get_printer_cache_path(printers[index].config.device_id);
-    
-    // Read the file
-    FILE* f = fopen(cache_path.c_str(), "r");
-    if (!f) {
-        return -1;
-    }
-    
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    if (fsize <= 0 || fsize > 32768) {
-        fclose(f);
-        return -1;
-    }
-    
-    char* json_buf = (char*)malloc(fsize + 1);
-    if (!json_buf) {
-        fclose(f);
-        return -1;
-    }
-    
-    size_t read_size = fread(json_buf, 1, fsize, f);
-    fclose(f);
-    json_buf[read_size] = '\0';
-    
-    cJSON* root = cJSON_Parse(json_buf);
-    free(json_buf);
-    
-    if (!root) {
-        return -1;
-    }
-    
-    // Get progress
-    cJSON* progress = cJSON_GetObjectItem(root, "progress");
-    int prog = progress ? (int)progress->valuedouble : 0;
-    
-    // Get state if requested
-    if (state_out) {
-        static char state_buf[32];
-        cJSON* state = cJSON_GetObjectItem(root, "state");
-        if (state && state->valuestring) {
-            strncpy(state_buf, state->valuestring, sizeof(state_buf) - 1);
-            state_buf[sizeof(state_buf) - 1] = '\0';
-            *state_out = state_buf;
-        } else {
-            *state_out = "IDLE";
-        }
-    }
-    
-    cJSON_Delete(root);
-    return prog;
 }

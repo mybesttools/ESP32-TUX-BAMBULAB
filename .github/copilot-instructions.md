@@ -1,5 +1,35 @@
 # ESP32-TUX Copilot Instructions
 
+## Development Environment
+
+### ESP-IDF Installation Path
+**IMPORTANT**: ESP-IDF is installed at `/Users/mikevandersluis/esp-idf` (aka `~/esp-idf`)
+
+When running ESP-IDF commands:
+- Source the environment: `. ~/esp-idf/export.sh`
+- Or use project scripts: `./scripts/build_and_flash.sh`
+- Build commands: `idf.py build`, `idf.py flash`, `idf.py monitor`
+- Never assume ESP-IDF is in PATH without sourcing `export.sh` first
+
+### Build System Quick Reference
+```bash
+# Proper build workflow
+. ~/esp-idf/export.sh     # Source ESP-IDF environment
+idf.py build              # Build project
+idf.py -p PORT flash      # Flash to device
+idf.py monitor            # Monitor serial output
+
+# Build and flash script
+# IMPORTANT: This script ALWAYS builds AND flashes (no build-only mode)
+# Parameters: [port] [baud]
+./scripts/build_and_flash.sh                    # Auto-detect port, 460800 baud
+./scripts/build_and_flash.sh /dev/cu.usbmodem21201  # Specific port
+./scripts/build_and_flash.sh /dev/cu.usbmodem21201 921600  # Custom baud
+
+# For build-only (no flash), use idf.py directly:
+. ~/esp-idf/export.sh && idf.py build
+```
+
 ## Markdown Quality Standards
 
 Wheever creating Markdown, make sure no linting errrors occur!!!

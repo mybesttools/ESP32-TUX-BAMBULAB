@@ -103,23 +103,32 @@ static std::map<int, std::string> *slide_country_by_index_ptr = nullptr;
 
 // Get full path to a printer cache file
 // Checks SD card first, then SPIFFS for existing files
+// If both exist, returns the newer file (based on mtime)
 // Returns SD card path if SD is available, otherwise SPIFFS
 static std::string gui_get_printer_file_path(const std::string& serial) {
-    struct stat st;
+    struct stat st_sd, st_spiffs;
     std::string sdcard_path = std::string(GUI_SDCARD_PRINTER_PATH) + "/" + serial + ".json";
     std::string spiffs_path = std::string(GUI_SPIFFS_PRINTER_PATH) + "/" + serial + ".json";
     
-    // First check if file exists on SD card
-    if (stat(sdcard_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+    bool sd_exists = (stat(sdcard_path.c_str(), &st_sd) == 0 && S_ISREG(st_sd.st_mode));
+    bool spiffs_exists = (stat(spiffs_path.c_str(), &st_spiffs) == 0 && S_ISREG(st_spiffs.st_mode));
+    
+    // If both exist, return the newer file
+    if (sd_exists && spiffs_exists) {
+        if (st_spiffs.st_mtime > st_sd.st_mtime) {
+            ESP_LOGD("gui", "Using SPIFFS file (newer: %ld > %ld)", 
+                     (long)st_spiffs.st_mtime, (long)st_sd.st_mtime);
+            return spiffs_path;
+        }
         return sdcard_path;
     }
     
-    // Check if file exists on SPIFFS
-    if (stat(spiffs_path.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-        return spiffs_path;
-    }
+    // If only one exists, return that
+    if (sd_exists) return sdcard_path;
+    if (spiffs_exists) return spiffs_path;
     
     // File doesn't exist yet - return SD card path if SD is mounted
+    struct stat st;
     if (stat("/sdcard", &st) == 0 && S_ISDIR(st.st_mode)) {
         return sdcard_path;
     }
@@ -895,14 +904,18 @@ static void create_page_home(lv_obj_t *parent)
         // Subscribe to config changes (web UI added/removed locations or printers)
         lv_msg_subscribe(MSG_CONFIG_CHANGED, [](void *s, lv_msg_t *m) {
             ESP_LOGI("GUI", "MSG_CONFIG_CHANGED received - rebuilding carousel and applying theme");
-            // Reload config from disk before rebuilding
+            // Config is already updated in memory by the web POST handler
+            // No need to reload from disk - just apply the current values
             if (cfg) {
-                cfg->load_config();
-                
                 // Apply theme from config
                 bool is_dark = (cfg->CurrentTheme == "dark");
                 switch_theme(is_dark);
                 ESP_LOGI("GUI", "Applied theme from config: %s", cfg->CurrentTheme.c_str());
+                
+                // Update carousel theme colors
+                if (carousel_widget) {
+                    carousel_widget->update_theme_colors();
+                }
             }
             update_carousel_slides();
         }, NULL);
@@ -1033,7 +1046,7 @@ static void update_carousel_slides()
         placeholder.subtitle = TR(STR_WELCOME_SUBTITLE);
         placeholder.value1 = TR(STR_WELCOME_MSG);
         placeholder.value2 = "";
-        placeholder.bg_color = lv_color_hex(0x2a2a2a);
+        placeholder.bg_color = carousel_get_default_slide_bg();  // Theme-aware
         carousel_widget->add_slide(placeholder);
     }
     
@@ -1702,6 +1715,11 @@ void weather_poll_init()
         // Poll weather files every 5 seconds
         weather_poll_timer = lv_timer_create(weather_poll_timer_cb, 5000, NULL);
         ESP_LOGI(TAG, "Weather file polling timer started (5s interval)");
+        
+        // Immediately load cached weather data on startup
+        // This populates the UI with existing cache before waiting for API calls
+        ESP_LOGI(TAG, "Loading cached weather data on startup...");
+        poll_weather_files();
     }
 }
 // ============= END FILE-BASED WEATHER POLLING =============
@@ -2011,30 +2029,6 @@ static void poll_printer_files()
         slide.value3 = value3_buf;
         slide.value4 = value4_buf;
 
-        // Get snapshot path from BambuMonitor - find printer index by serial
-        slide.snapshot_path.clear();  // Reset first
-        for (int bm_idx = 0; bm_idx < BAMBU_MAX_PRINTERS; bm_idx++) {
-            if (!bambu_is_printer_active(bm_idx)) continue;
-            const char* device_id = bambu_get_device_id(bm_idx);
-            if (device_id && printer.serial == device_id) {
-                // Found matching printer in BambuMonitor
-                const char* snapshot = bambu_get_last_snapshot_path(bm_idx);
-                if (snapshot && snapshot[0] != '\0') {
-                    // Convert filesystem path to LVGL path format
-                    if (strncmp(snapshot, "/sdcard/", 8) == 0) {
-                        slide.snapshot_path = std::string("S:/") + (snapshot + 8);
-                    } else if (strncmp(snapshot, "/spiffs/", 8) == 0) {
-                        slide.snapshot_path = std::string("F:/") + (snapshot + 8);
-                    } else {
-                        slide.snapshot_path = snapshot;
-                    }
-                    ESP_LOGI(TAG, "Snapshot for %s: %s -> %s", printer.serial.c_str(), 
-                             snapshot, slide.snapshot_path.c_str());
-                }
-                break;
-            }
-        }
-
         // Update the actual UI labels
         carousel_widget->update_slide_labels(i);
 
@@ -2056,6 +2050,11 @@ void printer_poll_init()
         // Poll printer files every 5 seconds
         printer_poll_timer = lv_timer_create(printer_poll_timer_cb, 5000, NULL);
         ESP_LOGI(TAG, "Printer file polling timer started (5s interval)");
+        
+        // Immediately load cached printer data on startup
+        // This populates the UI with existing cache before waiting for MQTT updates
+        ESP_LOGI(TAG, "Loading cached printer data on startup...");
+        poll_printer_files();
     }
 }
 // ============= END PRINTER FILE-BASED POLLING =============

@@ -1,0 +1,65 @@
+name: Build Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'webinstaller/**'
+
+env:
+  IDF_VERSION: "v5.0.7"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: wt32-sc01-plus
+            target: esp32s3
+            config: CONFIG_TUX_DEVICE_WT32_SC01_PLUS
+          - device: wt32-sc01
+            target: esp32
+            config: CONFIG_TUX_DEVICE_WT32_SC01
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: ${{ matrix.target }}
+
+      - name: Configure and build
+        run: |
+          # Copy appropriate defaults
+          if [ "${{ matrix.target }}" = "esp32s3" ]; then
+            cp sdkconfig.defaults.esp32s3 sdkconfig.defaults
+          else
+            cp sdkconfig.defaults.esp32 sdkconfig.defaults
+          fi
+          
+          # Add device selection
+          echo "" >> sdkconfig.defaults
+          echo "${{ matrix.config }}=y" >> sdkconfig.defaults
+          
+          # Build
+          . $IDF_PATH/export.sh
+          idf.py set-target ${{ matrix.target }}
+          idf.py build
+          
+          # Report size
+          echo "## Build Summary: ${{ matrix.device }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          idf.py size >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

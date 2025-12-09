@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-TUX BambuLab Monitor - Web Installer</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+    <style>
+        :root {
+            --primary: #1e3a5f;
+            --secondary: #3a1e2f;
+            --accent: #ffa500;
+            --bg-dark: #1e1e1e;
+            --bg-card: #2a2a2a;
+            --text: #ffffff;
+            --text-muted: #aaaaaa;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, var(--bg-dark) 0%, #2d2d2d 100%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .logo {
+            width: 120px;
+            height: 120px;
+            margin-bottom: 1rem;
+        }
+        
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(90deg, var(--accent), #ffcc00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        
+        .card h2 {
+            color: var(--accent);
+            margin-bottom: 1rem;
+            font-size: 1.3rem;
+        }
+        
+        .install-section {
+            text-align: center;
+            padding: 2rem;
+        }
+        
+        esp-web-install-button {
+            --esp-tools-button-color: var(--accent);
+            --esp-tools-button-text-color: #000;
+        }
+        
+        esp-web-install-button::part(button) {
+            font-size: 1.2rem;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .device-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .device-option {
+            background: var(--bg-dark);
+            border: 2px solid transparent;
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            min-width: 180px;
+        }
+        
+        .device-option:hover {
+            border-color: var(--accent);
+        }
+        
+        .device-option.selected {
+            border-color: var(--accent);
+            background: rgba(255, 165, 0, 0.1);
+        }
+        
+        .device-option h3 {
+            font-size: 1rem;
+            margin-bottom: 0.3rem;
+        }
+        
+        .device-option p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        .steps {
+            counter-reset: step;
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: var(--bg-dark);
+            border-radius: 8px;
+        }
+        
+        .step::before {
+            counter-increment: step;
+            content: counter(step);
+            background: var(--accent);
+            color: #000;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 1rem;
+            flex-shrink: 0;
+        }
+        
+        .step-content h3 {
+            font-size: 1rem;
+            margin-bottom: 0.3rem;
+        }
+        
+        .step-content p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        
+        .requirements {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .requirement {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .requirement .icon {
+            font-size: 1.5rem;
+        }
+        
+        .warning {
+            background: rgba(255, 165, 0, 0.1);
+            border-left: 4px solid var(--accent);
+            padding: 1rem;
+            border-radius: 0 8px 8px 0;
+            margin-top: 1rem;
+        }
+        
+        .warning p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .feature {
+            background: var(--bg-dark);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .feature .icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.3rem;
+        }
+        
+        .feature p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        footer {
+            margin-top: 2rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 600px) {
+            body {
+                padding: 1rem;
+            }
+            
+            .card {
+                padding: 1.5rem;
+            }
+            
+            h1 {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <svg class="logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="45" fill="#1e3a5f"/>
+                <circle cx="50" cy="50" r="35" fill="#2a2a2a"/>
+                <rect x="35" y="30" width="30" height="35" rx="3" fill="#ffa500"/>
+                <rect x="40" y="65" width="20" height="8" rx="2" fill="#ffa500"/>
+                <circle cx="50" cy="45" r="8" fill="#2a2a2a"/>
+                <rect x="46" y="50" width="8" height="12" fill="#2a2a2a"/>
+            </svg>
+            <h1>ESP32-TUX BambuLab Monitor</h1>
+            <p class="subtitle">Web-based firmware installer - No software needed!</p>
+        </header>
+
+        <div class="card">
+            <h2>📋 Requirements</h2>
+            <div class="requirements">
+                <div class="requirement">
+                    <span class="icon">🌐</span>
+                    <div>
+                        <strong>Chrome or Edge</strong>
+                        <p style="color: var(--text-muted); font-size: 0.8rem;">Desktop browser required</p>
+                    </div>
+                </div>
+                <div class="requirement">
+                    <span class="icon">🔌</span>
+                    <div>
+                        <strong>USB Cable</strong>
+                        <p style="color: var(--text-muted); font-size: 0.8rem;">Data cable (not charge-only)</p>
+                    </div>
+                </div>
+                <div class="requirement">
+                    <span class="icon">📱</span>
+                    <div>
+                        <strong>ESP32 Device</strong>
+                        <p style="color: var(--text-muted); font-size: 0.8rem;">WT32-SC01 or compatible</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🎯 Select Your Device</h2>
+            <div class="device-selector">
+                <div class="device-option selected" data-device="wt32-sc01-plus" onclick="selectDevice(this)">
+                    <h3>WT32-SC01 Plus</h3>
+                    <p>ESP32-S3, 8MB Flash</p>
+                </div>
+                <div class="device-option" data-device="wt32-sc01" onclick="selectDevice(this)">
+                    <h3>WT32-SC01</h3>
+                    <p>ESP32, 4MB Flash</p>
+                </div>
+                <div class="device-option" data-device="makerfabs-s3" onclick="selectDevice(this)">
+                    <h3>Makerfabs 4.3"</h3>
+                    <p>ESP32-S3, 16MB Flash</p>
+                </div>
+            </div>
+            
+            <div class="install-section">
+                <esp-web-install-button id="installButton" manifest="manifest-wt32-sc01-plus.json">
+                    <button slot="activate">
+                        🚀 Install Firmware
+                    </button>
+                    <span slot="unsupported">
+                        <p style="color: #ff6b6b;">❌ Your browser doesn't support Web Serial.</p>
+                        <p>Please use <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong> on desktop.</p>
+                    </span>
+                    <span slot="not-allowed">
+                        <p style="color: #ff6b6b;">❌ Serial access not allowed.</p>
+                        <p>Please enable serial access in your browser settings.</p>
+                    </span>
+                </esp-web-install-button>
+            </div>
+            
+            <div class="warning">
+                <p>⚠️ <strong>First time?</strong> You may need to install USB drivers. 
+                   Windows users: <a href="https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers" target="_blank">CP210x Driver</a> or 
+                   <a href="https://www.wch-ic.com/downloads/CH341SER_ZIP.html" target="_blank">CH340 Driver</a></p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📝 Installation Steps</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-content">
+                        <h3>Connect your device</h3>
+                        <p>Plug the ESP32 device into your computer using a USB data cable.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-content">
+                        <h3>Select your device type</h3>
+                        <p>Choose the correct device from the options above.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-content">
+                        <h3>Click "Install Firmware"</h3>
+                        <p>A popup will ask you to select the serial port. Choose the one for your device.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-content">
+                        <h3>Wait for installation</h3>
+                        <p>The process takes about 2-3 minutes. Don't disconnect the device!</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-content">
+                        <h3>Setup WiFi</h3>
+                        <p>After install, find "ESP32-TUX" WiFi network on your phone to configure.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>✨ Features</h2>
+            <div class="features">
+                <div class="feature">
+                    <div class="icon">🖨️</div>
+                    <h3>Printer Monitoring</h3>
+                    <p>Real-time BambuLab printer status</p>
+                </div>
+                <div class="feature">
+                    <div class="icon">🌤️</div>
+                    <h3>Weather Display</h3>
+                    <p>Multi-location weather forecasts</p>
+                </div>
+                <div class="feature">
+                    <div class="icon">📱</div>
+                    <h3>Touch Interface</h3>
+                    <p>Smooth swipeable carousel UI</p>
+                </div>
+                <div class="feature">
+                    <div class="icon">🌐</div>
+                    <h3>Web Config</h3>
+                    <p>Easy browser-based setup</p>
+                </div>
+                <div class="feature">
+                    <div class="icon">🔄</div>
+                    <h3>OTA Updates</h3>
+                    <p>Wireless firmware updates</p>
+                </div>
+                <div class="feature">
+                    <div class="icon">🌍</div>
+                    <h3>Multi-Language</h3>
+                    <p>EN, DE, NL, PL, RU support</p>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>
+                <a href="https://github.com/mybesttools/ESP32-TUX-BAMBULAB" target="_blank">GitHub</a> · 
+                <a href="https://github.com/mybesttools/ESP32-TUX-BAMBULAB/issues" target="_blank">Report Issue</a> · 
+                Made with ❤️ by MyBestTools
+            </p>
+            <p style="margin-top: 0.5rem;">Version: <span id="version">1.0.0</span></p>
+        </footer>
+    </div>
+
+    <script>
+        function selectDevice(element) {
+            // Remove selected class from all options
+            document.querySelectorAll('.device-option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            
+            // Add selected class to clicked option
+            element.classList.add('selected');
+            
+            // Update the manifest URL
+            const device = element.dataset.device;
+            const installButton = document.getElementById('installButton');
+            installButton.setAttribute('manifest', `manifest-${device}.json`);
+        }
+        
+        // Load version from version.txt if available
+        fetch('version.txt')
+            .then(response => response.text())
+            .then(version => {
+                document.getElementById('version').textContent = version.trim();
+            })
+            .catch(() => {
+                // Keep default version
+            });
+    </script>
+</body>
+</html>

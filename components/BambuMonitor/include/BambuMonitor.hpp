@@ -10,11 +10,11 @@ extern "C" {
 /**
  * @brief Bambu Lab Printer Monitor Component
  * 
- * Handles MQTT communication with up to 6 Bambu Lab 3D printers sequentially,
+ * Handles MQTT communication with up to 6 Bambu Lab 3D printers simultaneously,
  * parses printer status, and manages printer state/animations.
  */
 
-// Maximum number of sequential printer connections
+// Maximum number of simultaneous printer connections
 #define BAMBU_MAX_PRINTERS 6
 
 ESP_EVENT_DECLARE_BASE(BAMBU_EVENT_BASE);
@@ -184,17 +184,6 @@ const char* bambu_get_device_id(int index);
 bool bambu_is_printer_active(int index);
 
 /**
- * @brief Check if printer supports real-time camera snapshots
- * 
- * Returns true for A1, A1 Mini, P1P, P1S (port 6000 MJPEG)
- * Returns false for X1, X1C, X1E (RTSP, requires FTP fallback)
- * 
- * @param index Printer index (0-5)
- * @return true if real-time camera is supported
- */
-bool bambu_supports_camera(int index);
-
-/**
  * @brief Reset SD card availability check
  * 
  * Call this after remounting the SD card to force a re-check.
@@ -205,19 +194,13 @@ void bambu_reset_sdcard_check(void);
  * @brief Capture a snapshot from printer camera
  * 
  * Downloads a JPEG snapshot from the printer's built-in camera and saves it to storage.
- * Snapshots are saved to /sdcard/snapshots/<serial>.jpg or SPIFFS fallback.
+ * Snapshots are saved to /sdcard/snapshots/<serial>_<timestamp>.jpg or SPIFFS fallback.
  * 
- * Camera access method varies by printer model:
- * - A1, A1 Mini, P1P, P1S: Port 6000 SSL MJPEG stream (real-time, ~30-50KB)
- * - X1, X1C, X1E: FTP thumbnails from SD card (updated every ~5 min during print)
- * 
- * Model detection is automatic based on serial number prefix:
- * - 00W=X1, 00M=X1C, 03W=X1E (use FTP)
- * - 01P=P1P, 01S=P1S, 039=A1, 030=A1 Mini (use port 6000)
+ * URL format: http://<printer_ip>/snapshot.cgi?user=bblp&pwd=<access_code>
  * 
  * @param index Printer index (0-5)
  * @param save_path Optional custom save path (NULL for auto-generated path)
- * @return ESP_OK on success, ESP_FAIL on error, ESP_ERR_NOT_SUPPORTED for X1 series
+ * @return ESP_OK on success, ESP_FAIL on error
  */
 esp_err_t bambu_capture_snapshot(int index, const char* save_path);
 
@@ -228,23 +211,6 @@ esp_err_t bambu_capture_snapshot(int index, const char* save_path);
  * @return Path to last snapshot or NULL if none
  */
 const char* bambu_get_last_snapshot_path(int index);
-
-/**
- * @brief Delete the snapshot for a printer (clear when idle at 0%)
- * 
- * @param index Printer index (0-5)
- * @return ESP_OK on success
- */
-esp_err_t bambu_delete_snapshot(int index);
-
-/**
- * @brief Get printer progress percentage from cache file
- * 
- * @param index Printer index (0-5)
- * @param state_out Optional: pointer to receive state string ("IDLE", "RUNNING", etc.)
- * @return Progress percentage (0-100), or -1 on error
- */
-int bambu_get_printer_progress(int index, const char** state_out);
 
 #ifdef __cplusplus
 }

@@ -38,6 +38,24 @@ void storage_health_record_sd_error(void);
 void storage_health_record_spiffs_error(void);
 
 /**
+ * @brief Backup settings.json from SD card to SPIFFS
+ * @return true if backup successful
+ */
+bool storage_backup_config_to_spiffs(void);
+
+/**
+ * @brief Restore settings.json from SPIFFS backup to SD card
+ * @return true if restore successful
+ */
+bool storage_restore_config_from_spiffs(void);
+
+/**
+ * @brief Format SD card and restore settings from SPIFFS backup
+ * @return true if format and restore successful
+ */
+bool storage_format_and_restore_sd(void);
+
+/**
  * @brief Log current storage health status
  */
 void storage_health_check(void);

@@ -73,6 +73,15 @@ SOFTWARE.
 #ifndef TUX_OWM_H_
 #define TUX_OWM_H_
 
+// C-linkage function to check if HTTP request is in progress (for TLS conflict avoidance)
+#ifdef __cplusplus
+extern "C" {
+#endif
+bool owm_is_http_active(void);
+#ifdef __cplusplus
+}
+#endif
+
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -112,9 +121,17 @@ class OpenWeatherMap
         /* HTTPS request to the Weather API */
         void request_weather_update(const string &location = "");
 
+        /* Check if location cache is fresh (less than max_age_seconds old) */
+        bool is_cache_fresh(const string &location, int max_age_seconds = 900);
+        
+        /* Load weather data from cache file without making HTTP request */
+        bool load_from_cache(const string &location);
+
         /* Handle json response */
 
     private:
+        /* Get sanitized cache file path for a location */
+        string get_cache_path(const string &location);
         SettingsConfig *cfg;
         string cfg_filename;  /* Settings config filename*/
 
