@@ -7,3 +7,18 @@ sdkconfig.old
 managed_components/
 cp-deploy.cmd
 bambu_project/
+
+# Security - Never commit private keys or secrets
+*.key
+*.pem.key
+*_key.pem
+server_certs/ca_key.pem
+
+# Local config files that might have credentials
+.env
+.env.local
+secrets.json
+credentials.json
+
+# macOS
+.DS_Store
