@@ -10,9 +10,9 @@ import json
 import time
 import paho.mqtt.client as mqtt
 
-# Printer details
-PRINTER_IP = "10.13.13.141"
-ACCESS_CODE = "10235137"
+# Printer details - MUST be provided via command line
+PRINTER_IP = ""
+ACCESS_CODE = ""
 PORT = 8883
 
 def on_connect(client, userdata, flags, rc, properties=None):
