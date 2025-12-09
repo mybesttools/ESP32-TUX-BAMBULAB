@@ -48,8 +48,12 @@ jobs:
             cp sdkconfig.defaults.esp32 sdkconfig.defaults
           fi
           
-          # Add device selection
+          # Clear all device selections and set the correct one
           echo "" >> sdkconfig.defaults
+          echo "# Device selection for CI" >> sdkconfig.defaults
+          echo "CONFIG_TUX_DEVICE_WT32_SC01_PLUS=n" >> sdkconfig.defaults
+          echo "CONFIG_TUX_DEVICE_WT32_SC01=n" >> sdkconfig.defaults
+          echo "CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA=n" >> sdkconfig.defaults
           echo "${{ matrix.config }}=y" >> sdkconfig.defaults
           
           # Build

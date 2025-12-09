@@ -50,9 +50,12 @@ jobs:
           # Start with device-specific defaults
           cp ${{ matrix.device.sdkconfig }} sdkconfig.defaults.ci
           
-          # Add device selection
+          # Clear all device selections and set the correct one
           echo "" >> sdkconfig.defaults.ci
-          echo "# Device selection" >> sdkconfig.defaults.ci
+          echo "# Device selection for CI" >> sdkconfig.defaults.ci
+          echo "CONFIG_TUX_DEVICE_WT32_SC01_PLUS=n" >> sdkconfig.defaults.ci
+          echo "CONFIG_TUX_DEVICE_WT32_SC01=n" >> sdkconfig.defaults.ci
+          echo "CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA=n" >> sdkconfig.defaults.ci
           echo "${{ matrix.device.config }}=y" >> sdkconfig.defaults.ci
           
           # Use as defaults
