@@ -23,9 +23,11 @@ jobs:
           - device: wt32-sc01-plus
             target: esp32s3
             config: CONFIG_TUX_DEVICE_WT32_SC01_PLUS
+            sdkconfig: sdkconfig.defaults.esp32s3
           - device: wt32-sc01
             target: esp32
             config: CONFIG_TUX_DEVICE_WT32_SC01
+            sdkconfig: sdkconfig.defaults.esp32
 
     steps:
       - name: Checkout repository
@@ -33,20 +35,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup ESP-IDF
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: ${{ env.IDF_VERSION }}
-          target: ${{ matrix.target }}
-
-      - name: Configure and build
+      - name: Configure device selection
         run: |
           # Copy appropriate defaults
-          if [ "${{ matrix.target }}" = "esp32s3" ]; then
-            cp sdkconfig.defaults.esp32s3 sdkconfig.defaults
-          else
-            cp sdkconfig.defaults.esp32 sdkconfig.defaults
-          fi
+          cp ${{ matrix.sdkconfig }} sdkconfig.defaults
           
           # Clear all device selections and set the correct one
           echo "" >> sdkconfig.defaults
@@ -56,14 +48,19 @@ jobs:
           echo "CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA=n" >> sdkconfig.defaults
           echo "${{ matrix.config }}=y" >> sdkconfig.defaults
           
-          # Build
-          . $IDF_PATH/export.sh
-          idf.py set-target ${{ matrix.target }}
-          idf.py build
-          
-          # Report size
-          echo "## Build Summary: ${{ matrix.device }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          idf.py size >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "=== sdkconfig.defaults ===" 
+          cat sdkconfig.defaults
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: ${{ matrix.target }}
+          command: idf.py build
+
+      - name: Report build size
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ env.IDF_VERSION }}
+          target: ${{ matrix.target }}
+          command: idf.py size
