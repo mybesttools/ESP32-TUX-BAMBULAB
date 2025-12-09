@@ -215,7 +215,7 @@ static const char *HTML_PAGE = R"rawliteral(
                 <input type="text" id="printerSerial" data-i18n="serialPlaceholder" placeholder="e.g., 0309DA541804686 (REQUIRED for A1 Mini)" style="flex: 1;">
                 <button id="fetchSerialBtn" onclick="fetchPrinterSerial()" disabled>🔍 Fetch Serial</button>
             </div>
-            <p style="font-size: 11px; color: #f0ad4e; margin: -5px 0 10px 0;">⚠️ A1 Mini REQUIRES serial number. Find it in Bambu app → Device → Settings → Device Info</p>
+            <p style="font-size: 11px; color: #f0ad4e; margin: -5px 0 10px 0;" data-i18n="a1MiniSerialWarning">⚠️ A1 Mini REQUIRES serial number. Find it in Bambu app → Device → Settings → Device Info</p>
             
             <div class="button-group">
                 <button id="addPrinterBtn" onclick="addPrinter()" data-i18n="addPrinterBtn" disabled>➕ Add Printer</button>
@@ -314,7 +314,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 scanning: 'Scanning',
                 starting: 'Starting',
                 noDiscoveredPrinters: 'No printers discovered',
-                discoveryComplete: 'Discovery complete'
+                discoveryComplete: 'Discovery complete',
+                a1MiniSerialWarning: '⚠️ A1 Mini REQUIRES serial number. Find it in Bambu app → Device → Settings → Device Info'
             },
             de: {
                 title: 'ESP32-TUX Konfiguration',
@@ -372,7 +373,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 scanning: 'Scanne',
                 starting: 'Starte',
                 noDiscoveredPrinters: 'Keine Drucker gefunden',
-                discoveryComplete: 'Suche abgeschlossen'
+                discoveryComplete: 'Suche abgeschlossen',
+                a1MiniSerialWarning: '⚠️ A1 Mini ERFORDERT Seriennummer. Finden Sie diese in der Bambu App → Gerät → Einstellungen → Geräteinformationen'
             },
             nl: {
                 title: 'ESP32-TUX Configuratie',
@@ -430,7 +432,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 scanning: 'Scannen',
                 starting: 'Starten',
                 noDiscoveredPrinters: 'Geen printers gevonden',
-                discoveryComplete: 'Zoeken voltooid'
+                discoveryComplete: 'Zoeken voltooid',
+                a1MiniSerialWarning: '⚠️ A1 Mini VEREIST serienummer. Vind het in de Bambu app → Apparaat → Instellingen → Apparaatinfo'
             },
             pl: {
                 title: 'Konfiguracja ESP32-TUX',
@@ -488,7 +491,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 scanning: 'Skanowanie',
                 starting: 'Uruchamianie',
                 noDiscoveredPrinters: 'Nie znaleziono drukarek',
-                discoveryComplete: 'Wykrywanie zakończone'
+                discoveryComplete: 'Wykrywanie zakończone',
+                a1MiniSerialWarning: '⚠️ A1 Mini WYMAGA numeru seryjnego. Znajdź go w aplikacji Bambu → Urządzenie → Ustawienia → Informacje o urządzeniu'
             },
             ru: {
                 title: 'Конфигурация ESP32-TUX',
@@ -546,7 +550,8 @@ static const char *HTML_PAGE = R"rawliteral(
                 scanning: 'Сканирование',
                 starting: 'Запуск',
                 noDiscoveredPrinters: 'Принтеры не найдены',
-                discoveryComplete: 'Поиск завершен'
+                discoveryComplete: 'Поиск завершен',
+                a1MiniSerialWarning: '⚠️ A1 Mini ТРЕБУЕТ серийный номер. Найдите его в приложении Bambu → Устройство → Настройки → Информация об устройстве'
             }
         };
         

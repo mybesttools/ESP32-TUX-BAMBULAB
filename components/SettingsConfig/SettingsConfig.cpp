@@ -30,6 +30,7 @@ static const char* TAG = "SettingsConfig";
 // Storage health monitoring (extern C for linkage with main.cpp)
 extern "C" {
     void storage_health_record_sd_error(void);
+    bool storage_backup_config_to_spiffs(void);
 }
 
 // Storage paths - prefer SD card over SPIFFS
@@ -502,6 +503,11 @@ void SettingsConfig::write_json_file()
     jsonfile.close();
     
     ESP_LOGI(TAG, "Wrote config to %s (size: %d bytes)", file_name.c_str(), jsonString.length());
+    
+    // Auto-backup to SPIFFS if writing to SD card (for recovery in case of SD errors)
+    if (file_name.find("/sdcard/") == 0) {
+        storage_backup_config_to_spiffs();
+    }
 }
 
 void SettingsConfig::add_printer(const string &name, const string &ip, const string &token, const string &serial)

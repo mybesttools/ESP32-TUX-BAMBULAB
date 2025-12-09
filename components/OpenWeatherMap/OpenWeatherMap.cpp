@@ -32,6 +32,14 @@ SOFTWARE.
 
 static const char* TAG = "OpenWeatherMap";
 
+// Global flag to indicate HTTP request is in progress (used by other components to avoid TLS conflicts)
+static volatile bool g_http_request_in_progress = false;
+
+// Public getter for HTTP activity status
+bool owm_is_http_active(void) {
+    return g_http_request_in_progress;
+}
+
 // Can Test HTTPS using Local Python server - same SSL cert used for OTA
 // extern const uint8_t local_server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 // extern const uint8_t local_server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
@@ -73,10 +81,111 @@ OpenWeatherMap::OpenWeatherMap()
 #endif
 }
 
+/**
+ * @brief Get sanitized cache file path for a location query
+ */
+string OpenWeatherMap::get_cache_path(const string &location)
+{
+    string query_city = location;
+    size_t comma_pos = query_city.find(',');
+    if (comma_pos != string::npos) {
+        query_city = query_city.substr(0, comma_pos);
+    }
+    // Sanitize: lowercase, spaces to underscores
+    for (char &c : query_city) {
+        if (c == ' ') c = '_';
+        else c = tolower(c);
+    }
+    return "/spiffs/weather/" + query_city + ".json";
+}
+
+/**
+ * @brief Check if cached weather data is fresh based on 'dt' field in JSON
+ * @param location Location query string (e.g., "Warsaw,Poland")
+ * @param max_age_seconds Maximum age in seconds (default 900 = 15 minutes)
+ * @return true if cache exists and is fresh, false otherwise
+ */
+bool OpenWeatherMap::is_cache_fresh(const string &location, int max_age_seconds)
+{
+    string cache_path = get_cache_path(location);
+    
+    ifstream cache_file(cache_path);
+    if (!cache_file.is_open()) {
+        ESP_LOGD(TAG, "Cache file not found: %s", cache_path.c_str());
+        return false;
+    }
+    
+    string cache_content((std::istreambuf_iterator<char>(cache_file)),
+                         std::istreambuf_iterator<char>());
+    cache_file.close();
+    
+    if (cache_content.empty()) {
+        return false;
+    }
+    
+    // Parse JSON to get 'dt' timestamp
+    cJSON *cache_json = cJSON_Parse(cache_content.c_str());
+    if (!cache_json) {
+        ESP_LOGW(TAG, "Failed to parse cache JSON: %s", cache_path.c_str());
+        return false;
+    }
+    
+    cJSON *dt_item = cJSON_GetObjectItem(cache_json, "dt");
+    if (!dt_item || !cJSON_IsNumber(dt_item)) {
+        ESP_LOGW(TAG, "Cache JSON missing 'dt' field: %s", cache_path.c_str());
+        cJSON_Delete(cache_json);
+        return false;
+    }
+    
+    time_t cache_time = (time_t)dt_item->valuedouble;
+    time_t now = time(NULL);
+    int age_seconds = (int)(now - cache_time);
+    
+    cJSON_Delete(cache_json);
+    
+    bool is_fresh = (age_seconds >= 0 && age_seconds < max_age_seconds);
+    ESP_LOGI(TAG, "Cache %s: age=%d seconds, max=%d, fresh=%s", 
+             cache_path.c_str(), age_seconds, max_age_seconds, is_fresh ? "yes" : "no");
+    
+    return is_fresh;
+}
+
+/**
+ * @brief Load weather data from cache file without making HTTP request
+ * @param location Location query string (e.g., "Warsaw,Poland")
+ * @return true if cache was loaded successfully
+ */
+bool OpenWeatherMap::load_from_cache(const string &location)
+{
+    string cache_path = get_cache_path(location);
+    
+    ifstream cache_file(cache_path);
+    if (!cache_file.is_open()) {
+        ESP_LOGD(TAG, "Cannot load from cache, file not found: %s", cache_path.c_str());
+        return false;
+    }
+    
+    jsonString.assign((std::istreambuf_iterator<char>(cache_file)),
+                      std::istreambuf_iterator<char>());
+    cache_file.close();
+    
+    if (jsonString.empty()) {
+        return false;
+    }
+    
+    LocationQuery = location;
+    load_json();
+    
+    ESP_LOGI(TAG, "Loaded weather from cache: %s", cache_path.c_str());
+    return true;
+}
+
 /* 
  * Get Weather from OpenWeatherMap API 
  * API call can fail => no wifi / connectivity issues / request limits
  * If fails, data from cache file is used.
+ * 
+ * Cache freshness: If cache is less than 15 minutes old, skip HTTP request.
 */
 void OpenWeatherMap::request_weather_update(const string &location_param)
 {
@@ -102,23 +211,66 @@ void OpenWeatherMap::request_weather_update(const string &location_param)
     }
     
     if (LocationQuery.empty()) {
-        ESP_LOGW(TAG, "Weather API Key not set");
+        ESP_LOGW(TAG, "No weather location configured");
         return;
     }
 
+    // Check if cache is fresh (< 15 minutes old based on 'dt' field in JSON)
+    // This saves API calls and reduces network traffic
+    const int CACHE_MAX_AGE_SECONDS = 15 * 60;  // 15 minutes
+    if (is_cache_fresh(LocationQuery, CACHE_MAX_AGE_SECONDS)) {
+        ESP_LOGI(TAG, "Cache is fresh for %s, loading from cache instead of API", LocationQuery.c_str());
+        load_from_cache(LocationQuery);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Cache expired or missing for %s, fetching from API", LocationQuery.c_str());
+    
     // Get weather from OpenWeatherMap and update the cache file
-    if (request_json_over_http() == ESP_OK) {
+    bool http_success = (request_json_over_http() == ESP_OK);
+    
+    if (http_success) {
         ESP_LOGI(TAG,"Updating and writing into cache - weather.json");
         write_json();    // Save content of jsonString to file if success
-    }
-    ESP_LOGI(TAG,"Reading - weather.json");
-    read_json();
+        
+        ESP_LOGI(TAG,"Reading - weather.json");
+        read_json();
 
-    ESP_LOGI(TAG,"Loading - weather.json");
-    load_json();
-    
-    // After load_json(), LocationName is set - write location-specific cache file
-    write_location_cache();
+        ESP_LOGI(TAG,"Loading - weather.json");
+        load_json();
+        
+        // After load_json(), LocationName is set - write location-specific cache file
+        write_location_cache();
+    } else {
+        // HTTP failed - try to load from location-specific cache file instead of generic one
+        // Extract city name from query (e.g., "Warsaw,Poland" -> "warsaw")
+        string query_city = LocationQuery;
+        size_t comma_pos = query_city.find(',');
+        if (comma_pos != string::npos) {
+            query_city = query_city.substr(0, comma_pos);
+        }
+        // Sanitize to match cache filename
+        for (char &c : query_city) {
+            if (c == ' ') c = '_';
+            else c = tolower(c);
+        }
+        string loc_cache_path = "/spiffs/weather/" + query_city + ".json";
+        
+        // Try location-specific cache first
+        ifstream loc_file(loc_cache_path);
+        if (loc_file.is_open()) {
+            ESP_LOGI(TAG, "HTTP failed, loading from location cache: %s", loc_cache_path.c_str());
+            jsonString.assign((std::istreambuf_iterator<char>(loc_file)),
+                        (std::istreambuf_iterator<char>()));
+            loc_file.close();
+            load_json();
+        } else {
+            // Fall back to generic cache file
+            ESP_LOGW(TAG, "HTTP failed and no location cache found, trying generic cache");
+            read_json();
+            load_json();
+        }
+    }
 }
 
 void OpenWeatherMap::load_json()
@@ -323,6 +475,9 @@ esp_err_t OpenWeatherMap::request_json_over_https()
 */
 esp_err_t OpenWeatherMap::request_json_over_http()
 {
+    // Set flag to indicate HTTP request is in progress (for TLS conflict avoidance)
+    g_http_request_in_progress = true;
+    
     char local_response_buffer[MAX_HTTP_OUTPUT_BUFFER] = {0};
 
     jsonString = "";
@@ -334,12 +489,14 @@ esp_err_t OpenWeatherMap::request_json_over_http()
     
     if (api_key.empty()) {
         ESP_LOGW(TAG, "Weather API Key not set");
+        g_http_request_in_progress = false;
         return ESP_FAIL;
     }
     
     // Use LocationQuery member variable (set by request_weather_update)
     if (LocationQuery.empty()) {
         ESP_LOGW(TAG, "No weather location configured");
+        g_http_request_in_progress = false;
         return ESP_FAIL;
     }
     
@@ -360,24 +517,39 @@ esp_err_t OpenWeatherMap::request_json_over_http()
     esp_http_client_config_t config = {
         .host = WEB_API_URL,
         .path = queryString.c_str(),
+        .timeout_ms = 10000,                       // 10 second timeout
+        .disable_auto_redirect = false,
         .event_handler = http_event_handle,
         .user_data = local_response_buffer,        // Pass address of local buffer to get response
+        .keep_alive_enable = false,                // Don't keep connection open (prevents socket exhaustion)
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == NULL) {
+        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+        g_http_request_in_progress = false;
+        return ESP_FAIL;
+    }
+    
     esp_err_t err = esp_http_client_perform(client);
 
     if (err == ESP_OK) {
-    ESP_LOGI(TAG, "Status = %d, content_length = %" PRId64 , // PRIu64  / PRIx64 to print in hexadecimal.
-            esp_http_client_get_status_code(client),
-            esp_http_client_get_content_length(client));
+        ESP_LOGI(TAG, "Status = %d, content_length = %" PRId64,
+                esp_http_client_get_status_code(client),
+                esp_http_client_get_content_length(client));
     } else {
+        ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        g_http_request_in_progress = false;
         return ESP_FAIL;
     }
 
+    esp_http_client_close(client);
     esp_http_client_cleanup(client);    
-    //ESP_LOGE(TAG,"JSON:\n%s",local_response_buffer);
     jsonString = local_response_buffer;
+    
+    g_http_request_in_progress = false;
     return ESP_OK;
 
 }

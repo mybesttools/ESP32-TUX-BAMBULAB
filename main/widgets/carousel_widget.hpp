@@ -11,6 +11,48 @@
 #include <string>
 #include "esp_log.h"
 #include "i18n/lang.hpp"  // Internationalization support
+#include "SettingsConfig.hpp"  // For theme settings
+
+// External reference to settings config
+extern SettingsConfig *cfg;
+
+// Theme-aware color helpers for carousel backgrounds
+// Dark theme: dark grays (0x1e1e1e, 0x2a2a2a)
+// Light theme: light grays (0xe0e0e0, 0xd0d0d0)
+static inline lv_color_t carousel_get_container_bg() {
+    if (cfg && cfg->CurrentTheme == "light") {
+        return lv_color_hex(0xe0e0e0);  // Light gray for light theme
+    }
+    return lv_color_hex(0x1e1e1e);  // Dark gray for dark theme
+}
+
+static inline lv_color_t carousel_get_indicator_bg() {
+    if (cfg && cfg->CurrentTheme == "light") {
+        return lv_color_hex(0xd0d0d0);  // Slightly darker light gray
+    }
+    return lv_color_hex(0x2a2a2a);  // Slightly lighter dark gray
+}
+
+static inline lv_color_t carousel_get_default_slide_bg() {
+    if (cfg && cfg->CurrentTheme == "light") {
+        return lv_color_hex(0xd0d0d0);  // Light theme slide background
+    }
+    return lv_color_hex(0x2a2a2a);  // Dark theme slide background
+}
+
+static inline lv_color_t carousel_get_text_color() {
+    if (cfg && cfg->CurrentTheme == "light") {
+        return lv_color_hex(0x333333);  // Dark text for light theme
+    }
+    return lv_color_white();  // White text for dark theme
+}
+
+static inline lv_color_t carousel_get_subtitle_color() {
+    if (cfg && cfg->CurrentTheme == "light") {
+        return lv_color_hex(0x666666);  // Medium gray for light theme
+    }
+    return lv_color_hex(0xaaaaaa);  // Light gray for dark theme
+}
 
 // Font declarations
 LV_FONT_DECLARE(font_fa_weather_42)
@@ -41,13 +83,12 @@ struct carousel_slide_t {
     std::string value2;          // Weather/status description
     std::string value3;          // Additional info (temp range, humidity, wind)
     std::string value4;          // Extra info line
-    std::string snapshot_path;   // Path to camera snapshot image (LVGL format: S:/path or F:/path)
     lv_color_t bg_color;         // Background color
     uint32_t icon_code;          // Font icon code (if used)
     carousel_slide_type_t type;  // Slide type for icon font selection
-    int printer_index;           // BambuMonitor printer index (for snapshot lookup)
+    int printer_index;           // BambuMonitor printer index
     
-    carousel_slide_t() : bg_color(lv_color_hex(0x2a2a2a)), icon_code(0), type(SLIDE_TYPE_OTHER), printer_index(-1) {}
+    carousel_slide_t() : bg_color(carousel_get_default_slide_bg()), icon_code(0), type(SLIDE_TYPE_OTHER), printer_index(-1) {}
 };
 
 // Carousel callback types
@@ -90,6 +131,7 @@ public:
     void prev_slide();
     int get_current_slide() { return current_slide; }
     int get_slide_count() { return slides.size(); }
+    void update_theme_colors();  // Update colors when theme changes
     
 private:
     void create_page_indicator();
@@ -110,7 +152,7 @@ void CarouselWidget::create_carousel(lv_obj_t *parent, int width, int height)
     lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(container, width, height);
     // Don't set position here - it will be set after creation in gui.hpp
-    lv_obj_set_style_bg_color(container, lv_color_hex(0x1e1e1e), 0);
+    lv_obj_set_style_bg_color(container, carousel_get_container_bg(), 0);
     lv_obj_set_style_border_width(container, 0, 0);
     lv_obj_set_style_pad_all(container, 0, 0);
     lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);  // Ensure container is visible
@@ -124,7 +166,7 @@ void CarouselWidget::create_carousel(lv_obj_t *parent, int width, int height)
     lv_obj_set_size(scroll_container, width, height - 50);  // Use passed width, not queried size
     lv_obj_set_pos(scroll_container, 0, 0);
     lv_obj_set_scroll_dir(scroll_container, LV_DIR_HOR);
-    lv_obj_set_style_bg_color(scroll_container, lv_color_hex(0x1e1e1e), 0);  // Match container bg
+    lv_obj_set_style_bg_color(scroll_container, carousel_get_container_bg(), 0);  // Match container bg
     lv_obj_set_style_border_width(scroll_container, 0, 0);
     lv_obj_set_style_radius(scroll_container, 0, 0);  // No rounded corners
     lv_obj_set_style_pad_all(scroll_container, 0, 0);
@@ -150,7 +192,7 @@ void CarouselWidget::create_carousel(lv_obj_t *parent, int width, int height)
     page_indicator = lv_obj_create(container);
     lv_obj_set_size(page_indicator, width, 40);
     lv_obj_set_pos(page_indicator, 0, height - 40);
-    lv_obj_set_style_bg_color(page_indicator, lv_color_hex(0x2a2a2a), 0);
+    lv_obj_set_style_bg_color(page_indicator, carousel_get_indicator_bg(), 0);
     lv_obj_set_style_border_width(page_indicator, 0, 0);
     lv_obj_set_flex_flow(page_indicator, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(page_indicator, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -307,32 +349,6 @@ void CarouselWidget::update_slides()
             lv_label_set_text(status_icon, "\xEF\x80\x91");  // f011 power-off (idle)
             lv_obj_set_pos(status_icon, width - 100, 60);  // Same position as weather icon
             
-            // Child 9: Camera snapshot container (bottom-right corner)
-            lv_obj_t *snapshot_img = lv_obj_create(slide_panel);
-            lv_obj_set_size(snapshot_img, 200, 150);  // 4:3 aspect ratio
-            lv_obj_set_pos(snapshot_img, width - 210, height - 190);  // Bottom right with margin
-            lv_obj_set_style_bg_color(snapshot_img, lv_color_hex(0x303030), 0);
-            lv_obj_set_style_bg_opa(snapshot_img, LV_OPA_100, 0);
-            lv_obj_set_style_radius(snapshot_img, 4, 0);
-            lv_obj_set_style_border_width(snapshot_img, 1, 0);
-            lv_obj_set_style_border_color(snapshot_img, lv_color_hex(0x505050), 0);
-            lv_obj_set_style_pad_all(snapshot_img, 0, 0);
-            lv_obj_clear_flag(snapshot_img, LV_OBJ_FLAG_SCROLLABLE);
-            
-            // "No Data" label inside container
-            lv_obj_t *no_data_lbl = lv_label_create(snapshot_img);
-            lv_label_set_text(no_data_lbl, "No Camera");
-            lv_obj_set_style_text_font(no_data_lbl, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(no_data_lbl, lv_color_hex(0x808080), 0);
-            lv_obj_center(no_data_lbl);
-            
-            // Actual image (child of container, initially hidden)
-            lv_obj_t *snapshot_actual = lv_img_create(snapshot_img);
-            lv_obj_set_size(snapshot_actual, 200, 150);
-            lv_obj_set_pos(snapshot_actual, 0, 0);
-            lv_obj_add_flag(snapshot_actual, LV_OBJ_FLAG_HIDDEN);
-            // Image source set later via update_slide_labels() when snapshot is available
-            
         } else {
             // ============ WEATHER/DEFAULT SLIDE LAYOUT ============
             // Title (Location)
@@ -473,26 +489,6 @@ void CarouselWidget::update_slide_labels(int index)
                 lv_obj_set_style_text_color(status_icon, lv_color_hex(0x888888), 0);  // Gray
             }
         }
-        // Child 9 is snapshot container - update if path is available
-        if (child_count >= 10) {
-            lv_obj_t *snapshot_container = lv_obj_get_child(panel, 9);
-            if (snapshot_container) {
-                // Container has: child 0 = "No Camera" label, child 1 = actual image
-                lv_obj_t *no_data_lbl = lv_obj_get_child(snapshot_container, 0);
-                lv_obj_t *snapshot_actual = lv_obj_get_child(snapshot_container, 1);
-                
-                if (!slide.snapshot_path.empty() && snapshot_actual) {
-                    lv_img_set_src(snapshot_actual, slide.snapshot_path.c_str());
-                    lv_obj_clear_flag(snapshot_actual, LV_OBJ_FLAG_HIDDEN);
-                    if (no_data_lbl) lv_obj_add_flag(no_data_lbl, LV_OBJ_FLAG_HIDDEN);
-                    ESP_LOGD("CarouselWidget", "Set snapshot image: %s", slide.snapshot_path.c_str());
-                } else {
-                    // No snapshot - show "No Camera" label
-                    if (snapshot_actual) lv_obj_add_flag(snapshot_actual, LV_OBJ_FLAG_HIDDEN);
-                    if (no_data_lbl) lv_obj_clear_flag(no_data_lbl, LV_OBJ_FLAG_HIDDEN);
-                }
-            }
-        }
     } else {
         // Weather/default layout child indices (7 children):
         // 0=title, 1=subtitle, 2=value1, 3=value2, 4=value3, 5=value4, 6=icon
@@ -613,6 +609,23 @@ void CarouselWidget::scroll_event_cb(lv_event_t *e)
             carousel->on_slide_changed(new_slide);
         }
     }
+}
+
+void CarouselWidget::update_theme_colors()
+{
+    // Update container backgrounds when theme changes
+    if (container) {
+        lv_obj_set_style_bg_color(container, carousel_get_container_bg(), 0);
+    }
+    if (scroll_container) {
+        lv_obj_set_style_bg_color(scroll_container, carousel_get_container_bg(), 0);
+    }
+    if (page_indicator) {
+        lv_obj_set_style_bg_color(page_indicator, carousel_get_indicator_bg(), 0);
+    }
+    
+    ESP_LOGI("CarouselWidget", "Theme colors updated: container bg=%s", 
+             (cfg && cfg->CurrentTheme == "light") ? "light" : "dark");
 }
 
 #endif // CAROUSEL_WIDGET_HPP

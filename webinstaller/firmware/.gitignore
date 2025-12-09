@@ -1,0 +1,5 @@
+# Ignore compiled firmware binaries (they're built per-release)
+*.bin
+
+# Keep the directory structure
+!.gitkeep
