@@ -16,6 +16,7 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_idf_version.h"
 #include "ota.h"
 
 #if CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
@@ -26,7 +27,10 @@
 #include "esp_wifi.h"
 #endif
 
+#include "esp_tls.h"
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include "esp_crt_bundle.h"
+#endif
 
 static const char *TAG = "OTA";
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
