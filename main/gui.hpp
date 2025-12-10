@@ -490,14 +490,16 @@ static void screen_touch_event_handler(lv_event_t *e)
         
         // If touching bottom 60px of screen, toggle footer
         if (point.y > screen_h - 60) {
+            // Bring footer to foreground when touching bottom area
+            lv_obj_move_foreground(panel_footer_global);
             if (footer_visible) {
                 // Hide footer - position just below visible screen
-                lv_obj_set_y(panel_footer_global, screen_h - HEADER_HEIGHT);
+                lv_obj_set_y(panel_footer_global, screen_h);
                 footer_visible = false;
                 // Content stays same height - footer is accessible by scrolling down
             } else {
                 // Show footer - slide it into view
-                lv_obj_set_y(panel_footer_global, screen_h - HEADER_HEIGHT - FOOTER_HEIGHT);
+                lv_obj_set_y(panel_footer_global, screen_h - FOOTER_HEIGHT);
                 footer_visible = true;
                 // Content stays same height
             }
@@ -512,16 +514,15 @@ static void create_footer(lv_obj_t *parent)
     // lv_obj_set_style_bg_color(panel_footer, bg_theme_color, 0);
     lv_obj_set_style_pad_all(panel_footer, 0, 0);
     lv_obj_set_style_radius(panel_footer, 0, 0);
-    lv_obj_set_align(panel_footer, LV_ALIGN_BOTTOM_MID);
     lv_obj_set_scrollbar_mode(panel_footer, LV_SCROLLBAR_MODE_OFF);
     
     // Store global reference for toggle
     panel_footer_global = panel_footer;
     
-    // Position just below content area - accessible by scrolling down
-    lv_obj_set_y(panel_footer, screen_h - HEADER_HEIGHT);
+    // Start footer HIDDEN off-screen (below visible area)
+    // User must touch bottom of screen to bring it up
+    lv_obj_set_y(panel_footer, screen_h);  // Position just below screen
     footer_visible = false;
-
 /*
     // Create Footer label and animate if text is longer
     label_message = lv_label_create(panel_footer); // full screen as the parent
@@ -531,9 +532,9 @@ static void create_footer(lv_obj_t *parent)
     lv_obj_set_style_align(label_message,LV_ALIGN_BOTTOM_LEFT,0);
 
     // Show LVGL version in the footer
-    footer_message("A Touch UX Template using LVGL v%d.%d.%d", lv_version_major(), lv_version_minor(), lv_version_patch());
-*/
+    footer_message("Bambulab 3D Printer Monitor v%d.%d.%d", lv_version_major(), lv_version_minor(), lv_version_patch());
 
+*/
     /* REPLACE STATUS BAR WITH BUTTON PANEL FOR NAVIGATION */
     // Button order: HOME | SETTINGS | UPDATES
     // Icons: Home | Cog | Download (all FontAwesome)
@@ -654,8 +655,13 @@ static void slider_event_cb(lv_event_t * e)
 static void tux_panel_config(lv_obj_t *parent)
 {
     /******** CONFIG & TESTING ********/
-    lv_obj_t *island_2 = tux_panel_create(parent, FA_ICON_EDIT " CONFIG", 200);
+    lv_obj_t *island_2 = tux_panel_create(parent, "  CONFIG", 200);
     lv_obj_add_style(island_2, &style_ui_island, 0);
+    // Add icon to title panel
+    lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_2));
+    lv_obj_set_style_text_font(icon, font_fa, 0);
+    lv_label_set_text(icon, FA_ICON_EDIT);
+    lv_obj_move_to_index(icon, 0);  // Move icon before title text
 
     // Get Content Area to add UI elements
     lv_obj_t *cont_2 = tux_panel_get_content(island_2);
@@ -716,8 +722,13 @@ static void tux_panel_config(lv_obj_t *parent)
 static void tux_panel_wifi(lv_obj_t *parent)
 {
     /******** PROVISION WIFI ********/
-    island_wifi = tux_panel_create(parent, FA_ICON_WIFI " WIFI STATUS", 270);
+    island_wifi = tux_panel_create(parent, "  WIFI STATUS", screen_h);
     lv_obj_add_style(island_wifi, &style_ui_island, 0);
+    // Add icon to title panel
+    lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_wifi));
+    lv_obj_set_style_text_font(icon, font_fa, 0);
+    lv_label_set_text(icon, FA_ICON_WIFI);
+    lv_obj_move_to_index(icon, 0);  // Move icon before title text
     // tux_panel_set_title_color(island_wifi, lv_palette_main(LV_PALETTE_BLUE));
 
     // Get Content Area to add UI elements
@@ -735,7 +746,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
     lv_obj_set_size(lbl_webui_url, LV_PCT(90), LV_SIZE_CONTENT);
     lv_label_set_long_mode(lbl_webui_url, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl_webui_url, &font_montserrat_int_14, 0);
-    lv_label_set_text(lbl_webui_url, "Web UI: Waiting for IP...");
+    lv_label_set_text(lbl_webui_url, "For configuration go to:\nhttp://esp32-tux.local");
 
     // Check for Updates button
     lv_obj_t *btn_unprov = lv_btn_create(cont_1);
@@ -780,8 +791,13 @@ static void tux_panel_wifi(lv_obj_t *parent)
 static void tux_panel_ota(lv_obj_t *parent)
 {
     /******** OTA UPDATES ********/
-    island_ota = tux_panel_create(parent, FA_ICON_DOWNLOAD " OTA UPDATES", 180);
+    island_ota = tux_panel_create(parent, "  OTA UPDATES", 180);
     lv_obj_add_style(island_ota, &style_ui_island, 0);
+    // Add icon to title panel
+    lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_ota));
+    lv_obj_set_style_text_font(icon, font_fa, 0);
+    lv_label_set_text(icon, FA_ICON_DOWNLOAD);
+    lv_obj_move_to_index(icon, 0);  // Move icon before title text
 
     // Get Content Area to add UI elements
     lv_obj_t *cont_ota = tux_panel_get_content(island_ota);
@@ -816,8 +832,13 @@ static void tux_panel_ota(lv_obj_t *parent)
 
 static void tux_panel_devinfo(lv_obj_t *parent)
 {
-    island_devinfo = tux_panel_create(parent, FA_ICON_TINT " DEVICE INFO", 200);
+    island_devinfo = tux_panel_create(parent, "  DEVICE INFO", 200);
     lv_obj_add_style(island_devinfo, &style_ui_island, 0);
+    // Add icon to title panel
+    lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_devinfo));
+    lv_obj_set_style_text_font(icon, font_fa, 0);
+    lv_label_set_text(icon, FA_ICON_TINT);
+    lv_obj_move_to_index(icon, 0);  // Move icon before title text
 
     // Get Content Area to add UI elements
     lv_obj_t *cont_devinfo = tux_panel_get_content(island_devinfo);
@@ -842,8 +863,13 @@ static void create_page_remote(lv_obj_t *parent)
     lv_style_set_shadow_width(&style, 55);
     lv_style_set_shadow_color(&style, lv_palette_main(LV_PALETTE_BLUE));
 
-    lv_obj_t * island_remote = tux_panel_create(parent, FA_ICON_KEYBOARD " REMOTE", LV_PCT(100));
+    lv_obj_t * island_remote = tux_panel_create(parent, "  REMOTE", LV_PCT(100));
     lv_obj_add_style(island_remote, &style_ui_island, 0);
+    // Add icon to title panel
+    lv_obj_t *icon_remote = lv_label_create(tux_panel_get_title_panel(island_remote));
+    lv_obj_set_style_text_font(icon_remote, font_fa, 0);
+    lv_label_set_text(icon_remote, FA_ICON_KEYBOARD);
+    lv_obj_move_to_index(icon_remote, 0);  // Move icon before title text
 
     // Get Content Area to add UI elements
     lv_obj_t *cont_remote = tux_panel_get_content(island_remote);
@@ -881,6 +907,15 @@ static void slideshow_timer_cb(lv_timer_t * timer)
 static void update_carousel_slides();
 static void update_time_ui_from_tm(const struct tm *dtinfo);
 
+// Global touch handler - called from touchpad_read in helper_display.hpp
+static void handle_global_touch() {
+    if (panel_footer_global && !footer_visible && current_page == 0) {
+        lv_obj_set_y(panel_footer_global, screen_h - FOOTER_HEIGHT);
+        lv_obj_move_foreground(panel_footer_global);
+        footer_visible = true;
+    }
+}
+
 static void create_page_home(lv_obj_t *parent)
 {
     /* HOME PAGE - CAROUSEL MODE */
@@ -890,6 +925,9 @@ static void create_page_home(lv_obj_t *parent)
         if (panel_header) {
             lv_obj_add_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
         }
+        
+        // Register global touch callback to show footer on any touch
+        set_touch_callback(handle_global_touch);
         
         // Use full screen height - carousel fills entire screen
         carousel_widget = new CarouselWidget(parent, screen_w, screen_h);
@@ -918,6 +956,12 @@ static void create_page_home(lv_obj_t *parent)
                 }
             }
             update_carousel_slides();
+            
+            // Hide footer after carousel rebuild so touch can show it again
+            if (panel_footer_global) {
+                lv_obj_set_y(panel_footer_global, screen_h);  // Move off-screen
+                footer_visible = false;
+            }
         }, NULL);
         
         // Weather updates via file polling - no event subscription needed
@@ -1120,11 +1164,10 @@ static void show_ui()
     // Gradient / Image Background for screen container
     lv_obj_add_style(screen_container, &style_content_bg, 0);
 
-    // HEADER & FOOTER
+    // HEADER (on screen_container, always visible at top)
     create_header(screen_container);
-    create_footer(screen_container);
 
-    // CONTENT CONTAINER 
+    // CONTENT CONTAINER (scrollable)
     content_container = lv_obj_create(screen_container);
     content_container_global = content_container;  // Store global reference
     // Use full screen height - header is hidden on home page
@@ -1140,6 +1183,15 @@ static void show_ui()
     create_page_home(content_container);
     //create_page_settings(content_container);
     //create_page_remote(content_container);
+
+    // FOOTER (on screen_container so it persists across page changes)
+    // Footer starts hidden off-screen - touch bottom of screen to show it
+    create_footer(screen_container);
+    
+    // Add touch event handler for footer toggle (touch bottom of screen)
+    // Attach to content_container since it covers the screen and receives touches
+    lv_obj_add_event_cb(content_container, screen_touch_event_handler, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(content_container, LV_OBJ_FLAG_CLICKABLE);
 
     // Initialize slideshow timer (presentation mode - auto cycles through slides)
     if (slideshow_enabled) {
@@ -2091,48 +2143,54 @@ static void footer_button_event_handler(lv_event_t * e)
 
         // HOME (Button 0)
         if (page_id==0)  {
-            // Don't clean content_container - carousel needs to persist
-            // Just show carousel and hide header
-            if (carousel_widget && carousel_widget->container) {
-                lv_obj_clear_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
-            }
+            // Hide header on home page
             if (panel_header) {
                 lv_obj_add_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
             }
-            // Create carousel if it doesn't exist
-            if (!carousel_widget) {
-                create_page_home(content_container);
+            // Clean and recreate carousel (it was destroyed when navigating away)
+            lv_obj_clean(content_container);
+            carousel_widget = NULL;  // Ensure it's marked as destroyed
+            create_page_home(content_container);
+            // Hide footer off-screen so touch can show it again
+            if (panel_footer_global) {
+                lv_obj_set_y(panel_footer_global, screen_h);  // Move off-screen
+                lv_obj_move_background(panel_footer_global);
+                footer_visible = false;
             }
             anim_move_left_x(content_container,screen_w,0,200);
             lv_msg_send(MSG_PAGE_HOME,NULL);
         }
         // WIFI & SETTINGS (Button 1)
         else if (page_id == 1) {
-            // Hide carousel when leaving home page
-            if (carousel_widget && carousel_widget->container) {
-                lv_obj_add_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
-            }
             // Show header on other pages
             if (panel_header) {
                 lv_obj_clear_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
             }
+            // Clean content_container - this destroys carousel
             lv_obj_clean(content_container);
+            carousel_widget = NULL;  // Mark as destroyed
             create_page_settings(content_container);
+            // Bring footer to foreground on non-carousel pages
+            if (panel_footer_global) {
+                lv_obj_move_foreground(panel_footer_global);
+            }
             anim_move_left_x(content_container,screen_w,0,200);
             lv_msg_send(MSG_PAGE_SETTINGS,NULL);
         }
         // OTA UPDATES (Button 2)
         else if (page_id == 2) {
-            // Hide carousel when leaving home page
-            if (carousel_widget && carousel_widget->container) {
-                lv_obj_add_flag(carousel_widget->container, LV_OBJ_FLAG_HIDDEN);
-            }
             // Show header on other pages
             if (panel_header) {
                 lv_obj_clear_flag(panel_header, LV_OBJ_FLAG_HIDDEN);
             }
+            // Clean content_container - this destroys carousel
             lv_obj_clean(content_container);
+            carousel_widget = NULL;  // Mark as destroyed
             create_page_updates(content_container);
+            // Bring footer to foreground on non-carousel pages
+            if (panel_footer_global) {
+                lv_obj_move_foreground(panel_footer_global);
+            }
             anim_move_left_x(content_container,screen_w,0,200);
             lv_msg_send(MSG_PAGE_OTA,NULL);
         }

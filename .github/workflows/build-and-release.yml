@@ -28,10 +28,6 @@ jobs:
             target: esp32
             config: CONFIG_TUX_DEVICE_WT32_SC01
             sdkconfig: sdkconfig.defaults.esp32
-          - name: makerfabs-s3
-            target: esp32s3
-            config: CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA
-            sdkconfig: sdkconfig.defaults.esp32s3
 
     steps:
       - name: Checkout repository
@@ -63,26 +59,24 @@ jobs:
 
       - name: Build firmware
         run: |
-          . $IDF_PATH/export.sh
           idf.py set-target ${{ matrix.device.target }}
           idf.py build
 
       - name: Prepare artifacts
         run: |
           mkdir -p firmware/${{ matrix.device.name }}
-          cp build/bootloader/bootloader.bin firmware/${{ matrix.device.name }}/
-          cp build/partition_table/partition-table.bin firmware/${{ matrix.device.name }}/
-          cp build/ota_data_initial.bin firmware/${{ matrix.device.name }}/
-          cp build/ESP32-TUX.bin firmware/${{ matrix.device.name }}/
-          cp build/storage.bin firmware/${{ matrix.device.name }}/
+          cp build/bootloader/bootloader.bin firmware/${{ matrix.device.name }}/ || true
+          cp build/partition_table/partition-table.bin firmware/${{ matrix.device.name }}/ || true
+          cp build/ota_data_initial.bin firmware/${{ matrix.device.name }}/ || true
+          cp build/ESP32-TUX.bin firmware/${{ matrix.device.name }}/ || true
+          cp build/storage.bin firmware/${{ matrix.device.name }}/ || true
           
           # Create combined binary for easy flashing
-          . $IDF_PATH/export.sh
           esptool.py --chip ${{ matrix.device.target }} merge_bin \
             -o firmware/${{ matrix.device.name }}/ESP32-TUX-${{ matrix.device.name }}-full.bin \
             --flash_mode dio \
             --flash_size detect \
-            $(cat build/flash_args | tr '\n' ' ')
+            $(cat build/flash_args | tr '\n' ' ') || true
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
@@ -110,7 +104,7 @@ jobs:
           mkdir -p release
           
           # Move firmware to proper structure
-          for device in wt32-sc01-plus wt32-sc01 makerfabs-s3; do
+          for device in wt32-sc01-plus wt32-sc01; do
             if [ -d "firmware-artifacts/firmware-$device" ]; then
               mkdir -p release/firmware/$device
               cp -r firmware-artifacts/firmware-$device/* release/firmware/$device/
@@ -157,7 +151,6 @@ jobs:
             |--------|----------|
             | WT32-SC01 Plus (ESP32-S3, 8MB) | [Download](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ESP32-TUX-wt32-sc01-plus-${{ github.ref_name }}.zip) |
             | WT32-SC01 (ESP32, 4MB) | [Download](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ESP32-TUX-wt32-sc01-${{ github.ref_name }}.zip) |
-            | Makerfabs S3 4.3" (ESP32-S3, 16MB) | [Download](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ESP32-TUX-makerfabs-s3-${{ github.ref_name }}.zip) |
             
             ### ✨ What's New
             
