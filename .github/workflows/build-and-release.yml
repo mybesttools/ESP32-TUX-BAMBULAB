@@ -112,6 +112,12 @@ jobs:
         with:
           path: firmware-artifacts
 
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find firmware-artifacts -type f -name "*.bin" | head -20
+          ls -la firmware-artifacts/ 2>/dev/null || echo "No firmware-artifacts dir"
+
       - name: Prepare release files
         run: |
           mkdir -p release
@@ -119,29 +125,18 @@ jobs:
           # Move firmware to proper structure
           for device in wt32-sc01-plus wt32-sc01; do
             if [ -d "firmware-artifacts/firmware-$device" ]; then
-              mkdir -p release/firmware/$device
-              cp -r firmware-artifacts/firmware-$device/* release/firmware/$device/
+              mkdir -p release/$device
+              cp -r firmware-artifacts/firmware-$device/* release/$device/
               
               # Create zip for each device
-              cd release/firmware/$device
-              zip -r "../../../release/ESP32-TUX-$device-${GITHUB_REF_NAME}.zip" .
-              cd ../../..
+              cd release/$device
+              zip -r "../ESP32-TUX-$device-${GITHUB_REF_NAME}.zip" .
+              cd ../..
             fi
           done
           
-          # Copy web installer files
-          cp webinstaller/index.html release/
-          cp webinstaller/manifest-*.json release/
-          cp webinstaller/README.md release/
-          
-          # Update version in manifests
-          VERSION="${GITHUB_REF_NAME#v}"
-          for manifest in release/manifest-*.json; do
-            sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$manifest"
-          done
-          
-          # Create version file
-          echo "$VERSION" > release/version.txt
+          # List what we created
+          ls -la release/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
