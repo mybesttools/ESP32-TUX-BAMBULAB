@@ -12,6 +12,7 @@ Copyright (c) 2024 ESP32-TUX Contributors
 #include <cJSON.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
+#include <esp_app_desc.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <sys/socket.h>
@@ -1890,11 +1891,14 @@ esp_err_t WebServer::handle_api_test_connection(httpd_req_t *req) {
 esp_err_t WebServer::handle_api_device_info(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
     
+    // Get app version from running partition
+    const esp_app_desc_t *app_desc = esp_app_get_description();
+    
     // Add device information
     cJSON_AddStringToObject(root, "device_name", cfg ? cfg->DeviceName.c_str() : "ESP32-TUX");
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "min_free_heap", esp_get_minimum_free_heap_size());
-    cJSON_AddStringToObject(root, "version", "1.0.0");
+    cJSON_AddStringToObject(root, "version", app_desc->version);
     
     // Try to get WiFi info
     wifi_ap_record_t ap_info;
