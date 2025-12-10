@@ -120,8 +120,14 @@ jobs:
         with:
           files: |
             release/ESP32-TUX-*.zip
+            release/wt32-sc01-plus/ESP32-TUX.bin
           body: |
             ## ESP32-TUX BambuLab Monitor ${{ github.ref_name }}
+            
+            ### 🔄 OTA Update
+            
+            Devices with OTA enabled will automatically detect this update!
+            Direct download: [ESP32-TUX.bin](https://github.com/${{ github.repository }}/releases/latest/download/ESP32-TUX.bin)
             
             ### 🚀 Easy Install (Recommended)
             
