@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "i18n/lang.hpp"  // Internationalization support
 #include "SettingsConfig.hpp"  // For theme settings
+#include "../apps/weather/weathericons.h"  // Weather icon font codes
 
 // External reference to settings config
 extern SettingsConfig *cfg;
