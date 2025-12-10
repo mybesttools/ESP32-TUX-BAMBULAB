@@ -1,4 +1,0 @@
-/Users/mikevandersluis/esp-idf/tools/check_python_dependencies.py:12: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
-  import pkg_resources
-[0;33m--- idf_monitor on /dev/cu.SLAB_USBtoUART 115200 ---[0m
-[0;33m--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H ---[0m
