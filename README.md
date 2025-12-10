@@ -13,19 +13,32 @@
 - Currently Supported Devices - For Comparison [see below](#currently-supported-devices)
   - [WT32-SC01 - SPI TFT 3.5" ST7796 - ESP32](https://bit.ly/wt32-sc01)
   - [WT32-SC01 Plus 8Bit Parallel 3.5" ST7796UI - ESP32-S3](https://bit.ly/wt32-sc01-plus)
-  - [Makerfabs 16Bit Parallel TFT 3.5" ILI9488 - ESP32-S3](https://bit.ly/ESP32S335D)
-  - [Makerfabs SPI TFT 3.5" ILI9488 - ESP32-S3](https://bit.ly/ESP32S3SPI35)
 - Graphics & Touch Driver : [LovyanGFX](https://github.com/lovyan03/LovyanGFX)
 - UI / Widgets : [LVGL 8.x](https://github.com/lvgl/lvgl)
 - Framework : [ESP-IDF](https://github.com/espressif/esp-idf/)
+
+### Original Project & Contributing
+
+**Original Author**: [Sukesh Ashok Kumar](https://github.com/sukesh-ak/esp32-tux)  
+**Current Maintainer & Enhancements**: Mike van der Sluis ([MyBestTools](https://github.com/mybesttools))
+
+**Fork Enhancements** (v1.0.0+):
+- Bambu Lab MQTT Integration & 3D Printer Monitoring
+- Footer UX improvements with touch detection
+- FontAwesome icon rendering on panel titles
+- Multi-device CI/CD build pipeline
+- Web-based firmware deployment
+- Improved carousel widget and carousel data polling
+
+This is a derived work of the original ESP32-TUX project, maintained under the same MIT License. All modifications preserve the original license and attribution.
 
 ### SPONSORING
 
 [![Github sponsor](https://img.shields.io/static/v1?label=Click%20here%20to%20Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23FF007F&style=for-the-badge)](https://github.com/sponsors/sukesh-ak)  
 
-Your sponsorship would help me not only to maintain this project but also to work on a `version 2` of this project with `LVGL v9` support and other useful additions. If you're an individual user who has enjoyed my projects or benefited from my community work, please consider donating as a sign of appreciation. If you run a business that uses my work in your products, sponsoring my development makes good business sense: it ensures that the projects your product relies on stay healthy and actively maintained. I am also available in case you have custom HMI requirements.
+Your sponsorship would help not only to maintain this project but also to work on version improvements. If you're an individual user who has enjoyed this project or benefited from the community work, please consider donating as a sign of appreciation.
 
-Thank you for considering supporting my work!
+Thank you for your support!
 
 ## Screens
 
