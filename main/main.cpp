@@ -767,7 +767,7 @@ static void tux_ui_change_cb(void * s, lv_msg_t *m)
             break;
         case MSG_OTA_INITIATE:
             // OTA update from button trigger
-            xTaskCreate(run_ota_task, "run_ota_task", 1024 * 8, NULL, 5, NULL);
+            xTaskCreate(run_ota_task, "run_ota_task", 1024 * 10, NULL, 5, NULL);
             break;
     }
 }

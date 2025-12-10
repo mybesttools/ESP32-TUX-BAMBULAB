@@ -200,7 +200,8 @@ void run_ota_task(void *pvParameter)
         {
             /* Too many events generated with this. Maybe trigger event for every 10th item? */
             // Notify about TUX_EVENT_OTA_IN_PROGRESS event / Calculate and send progress percentage (or bytes)
-            ESP_ERROR_CHECK(esp_event_post(TUX_EVENTS, TUX_EVENT_OTA_IN_PROGRESS, &image_len_read,sizeof(image_len_read), portMAX_DELAY));        
+            // Use pdMS_TO_TICKS(100) instead of portMAX_DELAY to avoid blocking if queue is full
+            esp_event_post(TUX_EVENTS, TUX_EVENT_OTA_IN_PROGRESS, &image_len_read,sizeof(image_len_read), pdMS_TO_TICKS(100));        
             counter = 0; //reset
         }
 
