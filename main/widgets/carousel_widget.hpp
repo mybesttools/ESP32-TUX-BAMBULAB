@@ -93,6 +93,7 @@ struct carousel_slide_t {
 
 // Carousel callback types
 typedef void (*carousel_slide_changed_t)(int current_slide);
+typedef void (*carousel_touch_cb_t)(void);  // Callback for touch events
 
 class CarouselWidget {
 public:
@@ -100,6 +101,7 @@ public:
     std::vector<carousel_slide_t> slides;
     int current_slide;
     carousel_slide_changed_t on_slide_changed;
+    carousel_touch_cb_t on_touch;  // Touch callback
     int width;   // Saved dimensions
     int height;  // Saved dimensions
     
@@ -110,7 +112,7 @@ public:
     lv_obj_t *scroll_container;
     
     CarouselWidget(lv_obj_t *parent, int width, int height)
-        : container(nullptr), current_slide(0), on_slide_changed(nullptr),
+        : container(nullptr), current_slide(0), on_slide_changed(nullptr), on_touch(nullptr),
           page_indicator(nullptr), scroll_container(nullptr)
     {
         create_carousel(parent, width, height);
@@ -200,6 +202,21 @@ void CarouselWidget::create_carousel(lv_obj_t *parent, int width, int height)
     
     // Add scroll event listener
     lv_obj_add_event_cb(scroll_container, scroll_event_cb, LV_EVENT_SCROLL, (void*)this);
+    
+    // Add touch event listener for bringing footer to foreground
+    // Use LV_EVENT_PRESSING which fires continuously while touched
+    auto touch_cb = [](lv_event_t *e) {
+        CarouselWidget *widget = (CarouselWidget*)lv_event_get_user_data(e);
+        if (widget && widget->on_touch) {
+            widget->on_touch();
+        }
+    };
+    // Make scroll container clickable and add event
+    lv_obj_add_flag(scroll_container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(scroll_container, touch_cb, LV_EVENT_PRESSING, (void*)this);
+    // Also add to main container in case scroll container doesn't receive touch
+    lv_obj_add_flag(container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(container, touch_cb, LV_EVENT_PRESSING, (void*)this);
 }
 
 void CarouselWidget::add_slide(const carousel_slide_t &slide)

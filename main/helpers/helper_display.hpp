@@ -241,6 +241,13 @@ void lvgl_release(void)
 }
 
 // Touchpad callback to read the touchpad
+// Global touch callback - can be set from gui.hpp to handle touches at the driver level
+static void (*g_touch_callback)(void) = nullptr;
+
+void set_touch_callback(void (*callback)(void)) {
+    g_touch_callback = callback;
+}
+
 void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
 {
     uint16_t touchX, touchY;
@@ -257,5 +264,10 @@ void touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
         // Set the coordinates
         data->point.x = touchX;
         data->point.y = touchY;
+        
+        // Call global touch callback if set (e.g., to show footer)
+        if (g_touch_callback) {
+            g_touch_callback();
+        }
     }
 }
