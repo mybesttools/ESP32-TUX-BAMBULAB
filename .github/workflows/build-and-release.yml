@@ -43,15 +43,16 @@ jobs:
 
       - name: Set ESP-IDF Environment
         run: |
-          # The espressif action installs tools at /opt/esp
-          # We need to make them available for subsequent steps
+          # The espressif action adds tools to PATH via its internal container
+          # We need to capture and persist those paths for subsequent steps
+          # Note: /opt/esp paths don't exist on host, but tools are in PATH
           {
-            echo "IDF_PATH=/opt/esp/idf"
-            echo "PATH=/opt/esp/idf/tools:/opt/esp/python_env/idf5.0_py3.8_env/bin:$PATH"
-            echo "PYTHONPATH=/opt/esp/idf/components/espcoredump:/opt/esp/idf/components/partition_table:/opt/esp/idf/components/app_update"
+            echo "IDF_VERSION=v5.0.7"
+            echo "PATH=$PATH"
           } >> $GITHUB_ENV
 
       - name: Configure device
+        shell: bash -i {0}
         run: |
           # Start with device-specific defaults
           cp ${{ matrix.device.sdkconfig }} sdkconfig.defaults.ci
@@ -68,13 +69,13 @@ jobs:
           cp sdkconfig.defaults.ci sdkconfig.defaults
 
       - name: Build firmware
-        shell: bash
+        shell: bash -i {0}
         run: |
-          source $IDF_PATH/export.sh
           idf.py set-target ${{ matrix.device.target }}
           idf.py build
 
       - name: Prepare artifacts
+        shell: bash -i {0}
         run: |
           mkdir -p firmware/${{ matrix.device.name }}
           cp build/bootloader/bootloader.bin firmware/${{ matrix.device.name }}/ || true
@@ -84,7 +85,6 @@ jobs:
           cp build/storage.bin firmware/${{ matrix.device.name }}/ || true
           
           # Create combined binary for easy flashing
-          source $IDF_PATH/export.sh
           esptool.py --chip ${{ matrix.device.target }} merge_bin \
             -o firmware/${{ matrix.device.name }}/ESP32-TUX-${{ matrix.device.name }}-full.bin \
             --flash_mode dio \
