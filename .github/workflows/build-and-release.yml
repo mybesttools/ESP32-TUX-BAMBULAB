@@ -152,10 +152,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout repository
@@ -197,15 +193,9 @@ jobs:
           
           # Create version file
           echo "$VERSION" > pages/version.txt
-          
-          # List what we have
-          echo "Pages content:"
-          find pages -type f | head -20
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
-        with:
-          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -215,4 +205,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-        continue-on-error: true
