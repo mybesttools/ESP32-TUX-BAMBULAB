@@ -40,19 +40,8 @@ jobs:
         with:
           esp_idf_version: ${{ env.IDF_VERSION }}
           target: ${{ matrix.device.target }}
-
-      - name: Set ESP-IDF Environment
-        run: |
-          # The espressif action adds tools to PATH via its internal container
-          # We need to capture and persist those paths for subsequent steps
-          # Note: /opt/esp paths don't exist on host, but tools are in PATH
-          {
-            echo "IDF_VERSION=v5.0.7"
-            echo "PATH=$PATH"
-          } >> $GITHUB_ENV
-
+      
       - name: Configure device
-        shell: bash -i {0}
         run: |
           # Start with device-specific defaults
           cp ${{ matrix.device.sdkconfig }} sdkconfig.defaults.ci
@@ -68,14 +57,11 @@ jobs:
           # Use as defaults
           cp sdkconfig.defaults.ci sdkconfig.defaults
 
-      - name: Build firmware
-        shell: bash -i {0}
+      - name: Build firmware (with environment sourced)
         run: |
-          idf.py set-target ${{ matrix.device.target }}
-          idf.py build
+          bash -i -c 'idf.py set-target ${{ matrix.device.target }} && idf.py build'
 
       - name: Prepare artifacts
-        shell: bash -i {0}
         run: |
           mkdir -p firmware/${{ matrix.device.name }}
           cp build/bootloader/bootloader.bin firmware/${{ matrix.device.name }}/ || true
@@ -85,11 +71,11 @@ jobs:
           cp build/storage.bin firmware/${{ matrix.device.name }}/ || true
           
           # Create combined binary for easy flashing
-          esptool.py --chip ${{ matrix.device.target }} merge_bin \
+          bash -i -c 'esptool.py --chip ${{ matrix.device.target }} merge_bin \
             -o firmware/${{ matrix.device.name }}/ESP32-TUX-${{ matrix.device.name }}-full.bin \
             --flash_mode dio \
             --flash_size detect \
-            $(cat build/flash_args | tr '\n' ' ') || true
+            $(cat build/flash_args | tr '"'"'\n'"'"' '"'"' '"'"') || true'
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
