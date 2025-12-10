@@ -11,7 +11,7 @@ on:
       - 'webinstaller/**'
 
 env:
-  IDF_VERSION: "v5.0.7"
+  IDF_VERSION: "v5.1.5"
 
 jobs:
   build:
