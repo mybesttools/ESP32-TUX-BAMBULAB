@@ -29,6 +29,14 @@ A touchscreen dashboard for monitoring multiple Bambu Lab 3D printers in real-ti
 
 <!-- TODO: Replace with actual MakerWorld URL after upload -->
 
+### About This Project
+
+This touchscreen monitor was designed to solve a real problem: keeping tabs on multiple 3D printers across a workshop or office. The modular design makes it easy to customize for your specific needs.
+
+**I built this project to be community-driven.** Whether you're a maker looking to modify it for your setup, a developer wanting to add new features, or just someone who wants a reliable printer monitor—I hope this helps you as much as it helps me.
+
+The code is open, the hardware design is shareable, and the firmware updates automatically. If you improve something, consider contributing back!
+
 ---
 
 ## 🛒 Supported Hardware
@@ -147,6 +155,55 @@ See [FLASHING_GUIDE.md](FLASHING_GUIDE.md) for detailed instructions.
 - [Bambu Integration Quick Start](docs/BAMBU_QUICKSTART.md)
 - [Flashing Guide](FLASHING_GUIDE.md)
 - [Technical Design](docs/BAMBU_TECHNICAL_DESIGN.md)
+
+---
+
+## 🤝 Contributing & Community
+
+This project is maintained as open-source to encourage innovation and collaboration.
+
+### Ways to Contribute
+
+1. **Build the case and share your photos** — Post build pictures on MakerWorld or GitHub
+2. **Report issues** — Found a bug? Open an [Issue](https://github.com/mybesttools/ESP32-TUX-BAMBULAB/issues)
+3. **Request features** — Have an idea? Start a [Discussion](https://github.com/mybesttools/ESP32-TUX-BAMBULAB/discussions)
+4. **Submit pull requests** — Improvements are always welcome
+5. **Share your customizations** — Modified the firmware for your setup? We'd love to hear about it
+
+### Customization Ideas
+
+- Add support for other 3D printer brands (Prusa, Creality, Ender3, etc.)
+- Integrate with Home Assistant or Node-RED
+- Add network camera feeds
+- Create alternative UI themes
+- Support additional languages
+- Build enclosures for different environments
+
+### Development Setup
+
+```bash
+# Fork the repository
+git clone https://github.com/YOUR-USERNAME/ESP32-TUX-BAMBULAB.git
+cd ESP32-TUX-BAMBULAB
+
+# Create a feature branch
+git checkout -b feature/your-feature-name
+
+# Make your changes, test, and commit
+git push origin feature/your-feature-name
+
+# Open a pull request on GitHub
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines *(coming soon)*.
+
+---
+
+## 📞 Support & Feedback
+
+- **Questions?** Open a [GitHub Discussion](https://github.com/mybesttools/ESP32-TUX-BAMBULAB/discussions)
+- **Found a bug?** Open a [GitHub Issue](https://github.com/mybesttools/ESP32-TUX-BAMBULAB/issues)
+- **Want to chat?** Star the repo to stay updated on releases
 
 ---
 
