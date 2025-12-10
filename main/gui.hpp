@@ -1744,7 +1744,7 @@ static void poll_weather_files()
         // Update weather icon (child 6)
         if (icon_lbl && lv_obj_is_valid(icon_lbl)) {
             cJSON *icon_item = cJSON_GetObjectItem(weather_item, "icon");
-            const char *icon_code = icon_item ? icon_item->valuestring : "01d";
+            const char *icon_code = icon_item ? icon_item->valuestring : "03d";  // Default to scattered clouds instead of clear sky
             const char *icon_str = get_weather_icon_string(icon_code);
             lv_color_t icon_color = get_weather_icon_color(icon_code);
             lv_label_set_text(icon_lbl, icon_str);

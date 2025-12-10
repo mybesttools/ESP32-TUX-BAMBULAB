@@ -412,7 +412,7 @@ void CarouselWidget::update_slides()
             
             // Weather icon (child 6) - positioned on the right side
             lv_obj_t *icon = lv_label_create(slide_panel);
-            lv_label_set_text(icon, LV_SYMBOL_IMAGE);  // Placeholder until weather updates
+            lv_label_set_text(icon, FA_WEATHER_CLOUD);  // Default cloud icon until weather updates
             lv_obj_set_style_text_font(icon, &font_fa_weather_42, 0);
             lv_obj_set_style_text_color(icon, lv_color_make(241, 235, 156), 0);  // Warm yellow
             lv_obj_set_pos(icon, width - 100, 60);  // Position on right side
