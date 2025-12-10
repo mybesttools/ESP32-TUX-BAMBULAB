@@ -96,8 +96,9 @@ CONFIG_TIMEZONE_STRING="WET0WEST,M3.5.0/1,M10.5.0/2"
 CONFIG_ESP_TLS_INSECURE=y
 CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
 
-# Disable certificate bundle (we use printer's self-signed cert)
-# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+# Certificate bundle for OTA updates from GitHub (HTTPS)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 
 # =============================================================================
 # LVGL Configuration
