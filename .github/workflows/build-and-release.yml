@@ -35,31 +35,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup ESP-IDF
+      - name: Setup ESP-IDF and Build
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: ${{ env.IDF_VERSION }}
           target: ${{ matrix.device.target }}
-      
-      - name: Configure device
-        run: |
-          # Start with device-specific defaults
-          cp ${{ matrix.device.sdkconfig }} sdkconfig.defaults.ci
-          
-          # Clear all device selections and set the correct one
-          echo "" >> sdkconfig.defaults.ci
-          echo "# Device selection for CI" >> sdkconfig.defaults.ci
-          echo "CONFIG_TUX_DEVICE_WT32_SC01_PLUS=n" >> sdkconfig.defaults.ci
-          echo "CONFIG_TUX_DEVICE_WT32_SC01=n" >> sdkconfig.defaults.ci
-          echo "CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA=n" >> sdkconfig.defaults.ci
-          echo "${{ matrix.device.config }}=y" >> sdkconfig.defaults.ci
-          
-          # Use as defaults
-          cp sdkconfig.defaults.ci sdkconfig.defaults
-
-      - name: Build firmware (with environment sourced)
-        run: |
-          bash -i -c 'idf.py set-target ${{ matrix.device.target }} && idf.py build'
+          command: |
+            cp ${{ matrix.device.sdkconfig }} sdkconfig.defaults.ci
+            echo "" >> sdkconfig.defaults.ci
+            echo "# Device selection for CI" >> sdkconfig.defaults.ci
+            echo "CONFIG_TUX_DEVICE_WT32_SC01_PLUS=n" >> sdkconfig.defaults.ci
+            echo "CONFIG_TUX_DEVICE_WT32_SC01=n" >> sdkconfig.defaults.ci
+            echo "CONFIG_TUX_DEVICE_MAKERFABS_S3_PARA=n" >> sdkconfig.defaults.ci
+            echo "${{ matrix.device.config }}=y" >> sdkconfig.defaults.ci
+            cp sdkconfig.defaults.ci sdkconfig.defaults
+            idf.py set-target ${{ matrix.device.target }}
+            idf.py build
 
       - name: Prepare artifacts
         run: |
