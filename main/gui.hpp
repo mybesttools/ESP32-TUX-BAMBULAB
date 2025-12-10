@@ -773,9 +773,9 @@ static void tux_panel_wifi(lv_obj_t *parent)
 
     prov_qr = lv_qrcode_create(qr_status_container, 100, fg_color, bg_color);
 
-    /* Set data - format of BLE provisioning data */
-    // {"ver":"v1","name":"TUX_4AA440","pop":"abcd1234","transport":"ble"}
-    const char *qrdata = "https://github.com/sukesh-ak/ESP32-TUX";
+    /* Set initial placeholder data - will be updated when provisioning starts */
+    // This will be replaced with actual provisioning data when WIFI_PROV_SHOWQR event fires
+    const char *qrdata = "Provisioning not started - check status below";
     lv_qrcode_update(prov_qr, qrdata, strlen(qrdata));
 
     /*Add a border with bg_color*/
@@ -784,7 +784,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
 
     lbl_scan_status = lv_label_create(qr_status_container);
     lv_obj_set_size(lbl_scan_status, LV_SIZE_CONTENT, 30);
-    lv_label_set_text(lbl_scan_status, "Scan to learn about ESP32-TUX");
+    lv_label_set_text(lbl_scan_status, "Waiting for provisioning to start...");
 
 }
 
