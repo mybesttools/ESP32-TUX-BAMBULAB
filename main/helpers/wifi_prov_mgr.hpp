@@ -46,11 +46,9 @@ static EventGroupHandle_t wifi_event_group;
 #define PROV_QR_VERSION         "v1"
 #define PROV_TRANSPORT_SOFTAP   "softap"
 #define PROV_TRANSPORT_BLE      "ble"
-#define QRCODE_BASE_URL         "https://tux.sukesh.me/qr/qr.html"
-
-// Fallback WiFi credentials (change these to your network)
-#define FALLBACK_WIFI_SSID      "YourWiFiSSID"
-#define FALLBACK_WIFI_PASS      "YourWiFiPassword"
+// QR code helper URL - used for manual provisioning via browser (logged to console only)
+// The QR code itself contains raw JSON data, not this URL
+#define QRCODE_BASE_URL         "https://espressif.github.io/esp-jumpstart/qrcode.html"
 
 // Workaround for adding new event to WIFI_PROV
 #define WIFI_PROV_SHOWQR 10
@@ -123,16 +121,10 @@ static void wifi_init_sta(void)
     /* Start Wi-Fi in station mode */
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     
-    /* Set fallback WiFi credentials */
-    wifi_config_t wifi_config = {};
-    strcpy((char*)wifi_config.sta.ssid, FALLBACK_WIFI_SSID);
-    strcpy((char*)wifi_config.sta.password, FALLBACK_WIFI_PASS);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    wifi_config.sta.pmf_cfg.capable = true;
-    wifi_config.sta.pmf_cfg.required = false;
-    
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_LOGI(TAG, "Connecting to WiFi SSID: %s", FALLBACK_WIFI_SSID);
+    /* When already provisioned, WiFi credentials are stored in NVS
+     * by the provisioning manager. Just start WiFi - it will use
+     * the stored credentials automatically. */
+    ESP_LOGI(TAG, "Starting WiFi with provisioned credentials from NVS");
     
     ESP_ERROR_CHECK(esp_wifi_start());
 }

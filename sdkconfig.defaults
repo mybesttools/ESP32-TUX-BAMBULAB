@@ -15,8 +15,9 @@ CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
 # FAT filesystem for SD card
 CONFIG_FATFS_LFN_HEAP=y
 
-# Disable certificate bundle (we use printer's self-signed cert)
-# CONFIG_MBEDTLS_CERTIFICATE_BUNDLE is not set
+# Enable certificate bundle for OTA from GitHub (adds ~60KB to flash)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 
 # LVGL configuration - use custom lv_conf.h
 # CONFIG_LV_CONF_SKIP is not set

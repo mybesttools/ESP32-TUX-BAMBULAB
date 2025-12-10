@@ -267,6 +267,16 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             ESP_LOGW(TAG, "mDNS responder initialization failed: %s", esp_err_to_name(mdns_err));
         }
         
+        // Start web server now that WiFi is connected (after provisioning is done)
+        // This avoids port 80 conflict with provisioning HTTP server
+        if (web_server && !web_server->is_running()) {
+            if (web_server->start() == ESP_OK) {
+                ESP_LOGI(TAG, "Web server started successfully");
+            } else {
+                ESP_LOGE(TAG, "Failed to start web server");
+            }
+        }
+        
         // Update Web UI URL label with actual IP
         if (lbl_webui_url) {
             lvgl_acquire();
@@ -529,13 +539,9 @@ extern "C" void app_main(void)
     // Tuning PSRAM options visible only in IDF5, so will wait till then for BLE.
     xTaskCreate(provision_wifi, "wifi_prov", 1024*8, NULL, 3, NULL);
 
-    // Start web server for configuration
+    // Create web server instance (but don't start yet - wait for WiFi connection
+    // to avoid port 80 conflict with provisioning HTTP server)
     web_server = new WebServer();
-    if (web_server->start() == ESP_OK) {
-        ESP_LOGI(TAG, "Web server started successfully");
-    } else {
-        ESP_LOGE(TAG, "Failed to start web server");
-    }
 
     ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
 
