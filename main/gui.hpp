@@ -655,7 +655,7 @@ static void slider_event_cb(lv_event_t * e)
 static void tux_panel_config(lv_obj_t *parent)
 {
     /******** CONFIG & TESTING ********/
-    lv_obj_t *island_2 = tux_panel_create(parent, "  CONFIG", 200);
+    lv_obj_t *island_2 = tux_panel_create(parent, "    CONFIG", 200);
     lv_obj_add_style(island_2, &style_ui_island, 0);
     // Add icon to title panel
     lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_2));
@@ -722,7 +722,7 @@ static void tux_panel_config(lv_obj_t *parent)
 static void tux_panel_wifi(lv_obj_t *parent)
 {
     /******** PROVISION WIFI ********/
-    island_wifi = tux_panel_create(parent, "  WIFI STATUS", screen_h);
+    island_wifi = tux_panel_create(parent, "    WIFI STATUS", screen_h);
     lv_obj_add_style(island_wifi, &style_ui_island, 0);
     // Add icon to title panel
     lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_wifi));
@@ -791,7 +791,7 @@ static void tux_panel_wifi(lv_obj_t *parent)
 static void tux_panel_ota(lv_obj_t *parent)
 {
     /******** OTA UPDATES ********/
-    island_ota = tux_panel_create(parent, "  OTA UPDATES", 180);
+    island_ota = tux_panel_create(parent, "    OTA UPDATES", 180);
     lv_obj_add_style(island_ota, &style_ui_island, 0);
     // Add icon to title panel
     lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_ota));
@@ -832,7 +832,7 @@ static void tux_panel_ota(lv_obj_t *parent)
 
 static void tux_panel_devinfo(lv_obj_t *parent)
 {
-    island_devinfo = tux_panel_create(parent, "  DEVICE INFO", 200);
+    island_devinfo = tux_panel_create(parent, "    DEVICE INFO", 200);
     lv_obj_add_style(island_devinfo, &style_ui_island, 0);
     // Add icon to title panel
     lv_obj_t *icon = lv_label_create(tux_panel_get_title_panel(island_devinfo));
@@ -863,7 +863,7 @@ static void create_page_remote(lv_obj_t *parent)
     lv_style_set_shadow_width(&style, 55);
     lv_style_set_shadow_color(&style, lv_palette_main(LV_PALETTE_BLUE));
 
-    lv_obj_t * island_remote = tux_panel_create(parent, "  REMOTE", LV_PCT(100));
+    lv_obj_t * island_remote = tux_panel_create(parent, "    REMOTE", LV_PCT(100));
     lv_obj_add_style(island_remote, &style_ui_island, 0);
     // Add icon to title panel
     lv_obj_t *icon_remote = lv_label_create(tux_panel_get_title_panel(island_remote));
