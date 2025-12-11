@@ -26,7 +26,13 @@
 #include "esp_wifi.h"
 #endif
 
+// esp_crt_bundle is used for WiFi onboarding certificate validation
+#ifdef ESP_HTTPS_SERVER_SSL_CERT_BUNDLE_ATTACH
 #include "esp_crt_bundle.h"
+#define USE_CRT_BUNDLE 1
+#else
+#define USE_CRT_BUNDLE 0
+#endif
 
 static const char *TAG = "OTA";
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
@@ -139,8 +145,10 @@ void run_ota_task(void *pvParameter)
         .url = CONFIG_OTA_FIRMWARE_UPGRADE_URL,
         .timeout_ms = CONFIG_OTA_OTA_RECV_TIMEOUT,
         .keep_alive_enable = true,
+#if USE_CRT_BUNDLE
         // Use ESP-IDF certificate bundle for HTTPS verification (includes GitHub/DigiCert CAs)
         .crt_bundle_attach = esp_crt_bundle_attach,
+#endif
         .skip_cert_common_name_check = true,  // Skip CN check for redirects
         .buffer_size = 1024,  // Larger buffer for GitHub redirect URLs
         .buffer_size_tx = 1024,
