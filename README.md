@@ -2,7 +2,7 @@
 
 A touchscreen dashboard for monitoring multiple Bambu Lab 3D printers in real-time.
 
-![Bambu Lab Monitor](assets/tux-design.png)
+![Bambu Lab Monitor](assets/X1_Example.png)
 
 ![GitHub License](https://img.shields.io/github/license/mybesttools/ESP32-TUX-BAMBULAB?style=for-the-badge)
 ![GitHub Release](https://img.shields.io/github/v/release/mybesttools/ESP32-TUX-BAMBULAB?style=for-the-badge)
@@ -10,7 +10,7 @@ A touchscreen dashboard for monitoring multiple Bambu Lab 3D printers in real-ti
 
 ## Features
 
-- **Multi-Printer Carousel** — Monitor up to 10 printers with swipe navigation
+- **Multi-Printer Carousel** — Monitor up to 6 printers with swipe navigation
 - **Real-Time Updates** — Live progress, temperatures, and status via MQTT
 - **Auto-Discovery** — Finds Bambu Lab printers on your network automatically
 - **Weather Widget** — OpenWeatherMap integration with configurable location
@@ -18,16 +18,11 @@ A touchscreen dashboard for monitoring multiple Bambu Lab 3D printers in real-ti
 - **OTA Updates** — Update firmware wirelessly from GitHub releases
 - **Dark/Light Themes** — Toggle between visual themes
 
-![Home Screen](assets/1.home.png)
-![App Screen](assets/2.app.png)
-
 ---
 
 ## 🖨️ 3D Printable Case
 
-**[Download on MakerWorld](https://makerworld.com/)** *(Link coming soon)*
-
-<!-- TODO: Replace with actual MakerWorld URL after upload -->
+**[Download on MakerWorld](https://makerworld.com/en/models/2102801-esp32-tux-bambu-lab-monitor)**
 
 ### About This Project
 
