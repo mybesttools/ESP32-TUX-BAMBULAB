@@ -3,20 +3,24 @@
 ## 🎯 What We Fixed
 
 ### Problem 1: Config File Corruption
+
 **Before**: Settings.json would get corrupted, causing "Failed to parse JSON" errors and system instability
 **After**: Automatic backup created on every write; auto-restore when corruption detected
 
 ### Problem 2: MQTT Task Creation Failures
+
 **Before**: "Error create mqtt task" ×3 on startup, printers couldn't connect
 **After**: Optimized buffer sizes, all printers connect successfully
 
 ### Problem 3: JSON Parse Error Spam
+
 **Before**: 60+ error messages per minute flooding logs
 **After**: Rate-limited to 2 errors per minute with enhanced debugging info
 
 ## 🔧 How It Works
 
 ### Config Backup System
+
 ```
 Write Config Flow:
 1. User changes setting in web UI
@@ -47,6 +51,7 @@ Load Config Flow (Both Corrupted):
 ```
 
 ### Storage Health Monitoring
+
 ```
 Background Task (every 60 seconds):
 1. Check error counters
@@ -65,6 +70,7 @@ On Storage Error:
 ## 🧪 Testing Commands
 
 ### Test 1: Corrupt Config and Auto-Restore
+
 ```bash
 # SSH to device or use web UI file editor
 echo '{"invalid": "json' > /sdcard/settings.json
@@ -79,6 +85,7 @@ echo '{"invalid": "json' > /sdcard/settings.json
 ```
 
 ### Test 2: Force SD Card Errors
+
 ```bash
 # While device is running, remove SD card
 # Wait for 5 write attempts (watch serial output)
@@ -90,6 +97,7 @@ echo '{"invalid": "json' > /sdcard/settings.json
 ```
 
 ### Test 3: Verify Backup File Creation
+
 ```bash
 # Via web UI: Add a new printer or change a setting
 # SSH to device:
@@ -103,6 +111,7 @@ ls -lh /sdcard/settings.json*
 ```
 
 ### Test 4: Check Storage Health Status
+
 ```bash
 # Watch serial monitor for periodic logs:
 grep "StorageHealth" /dev/cu.usbmodem21201
@@ -119,6 +128,7 @@ grep "StorageHealth" /dev/cu.usbmodem21201
 ### Key Log Messages to Watch
 
 **Config Backup/Restore**:
+
 ```
 I (xxx) SettingsConfig: Config loaded successfully          # Normal boot
 W (xxx) SettingsConfig: Failed to parse JSON config        # Corruption detected
@@ -129,6 +139,7 @@ I (xxx) SettingsConfig: Using default configuration        # Fallback to default
 ```
 
 **Storage Health**:
+
 ```
 I (xxx) ESP32-TUX: Storage health monitor task started     # Task started
 I (xxx) StorageHealth: Status - SD errors: 0, SPIFFS errors: 0  # Periodic check
@@ -137,6 +148,7 @@ W (xxx) BambuMonitor: SD write failed (errno=257)          # Individual error lo
 ```
 
 **MQTT Connections**:
+
 ```
 I (xxx) BambuMonitor: [0] Connecting to 10.13.13.107:8883  # Connection attempt
 I (xxx) BambuMonitor: Waiting 5 seconds before next connection  # Stagger delay
@@ -145,6 +157,7 @@ E (xxx) mqtt_client: Error create mqtt task                # FAILURE (should not
 ```
 
 **JSON Parse Errors** (rate-limited):
+
 ```
 W (xxx) BambuMonitor: [1] Failed to parse JSON (data_len=8158, first 50 chars: {...})
 # Only appears once per 30 seconds per printer
@@ -153,18 +166,21 @@ W (xxx) BambuMonitor: [1] Failed to parse JSON (data_len=8158, first 50 chars: {
 ## 🔍 Debugging
 
 ### Config Not Loading?
+
 1. Check if settings.json exists: `ls -l /sdcard/settings.json`
 2. Check if backup exists: `ls -l /sdcard/settings.json.backup`
 3. Try manual validation: `cat /sdcard/settings.json | python -m json.tool`
 4. If both corrupt, delete both files and reboot (will create defaults)
 
 ### Storage Errors Appearing?
+
 1. Check SD card health: Try different card
 2. Check connections: Reseat SD card
 3. Check free space: `df -h /sdcard`
 4. Monitor error patterns: Are errors clustered or random?
 
 ### MQTT Not Connecting?
+
 1. Check heap memory: Look for memory allocation errors
 2. Check connection stagger: Should see "Waiting 5 seconds" between attempts
 3. Check network: Are printers reachable from device?
@@ -173,6 +189,7 @@ W (xxx) BambuMonitor: [1] Failed to parse JSON (data_len=8158, first 50 chars: {
 ## 📱 Web UI Integration (Future)
 
 Planned API endpoint for storage health:
+
 ```javascript
 GET /api/storage/health
 
@@ -189,6 +206,7 @@ Response:
 ```
 
 Planned settings page section:
+
 ```
 [Storage Health]
 SD Card:     ✓ Healthy (0 errors)
@@ -203,19 +221,24 @@ Last Check:  2 minutes ago
 ## 🚨 Troubleshooting
 
 ### "Failed to parse JSON" on every boot
+
 **Solution**: Both config files corrupted. Delete and recreate:
+
 ```bash
 rm /sdcard/settings.json /sdcard/settings.json.backup
 # Reboot - will create default config
 ```
 
 ### "SD card error threshold reached" frequently
+
 **Solution**: SD card failing. Replace card with high-quality industrial-grade SD card.
 
 ### MQTT connections fail intermittently
+
 **Solution**: Check heap usage. May need to reduce number of simultaneous printers or increase connection delay further.
 
 ### Backup file not being created
+
 **Solution**: Check SD card write permissions and free space. Ensure SettingsConfig is being called for all config changes.
 
 ## 📚 Related Documentation

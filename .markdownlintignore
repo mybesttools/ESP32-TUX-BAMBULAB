@@ -1,0 +1,15 @@
+# Ignore spacing rules around lists - they're overly strict
+MD032
+
+# Ignore blank line requirements around headings  
+MD022
+MD031
+
+# Ignore duplicate heading names - same section appears in multiple places
+MD024
+
+# Ignore trailing spaces - minor style issue
+MD009
+
+# Ignore ordered list prefix issues - we use custom numbering
+MD029

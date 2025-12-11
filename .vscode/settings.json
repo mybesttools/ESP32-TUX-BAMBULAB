@@ -1,8 +1,12 @@
 {
-    "idf.portWin": "COM14",
-    "idf.adapterTargetName": "esp32s3",
-    "idf.openOcdConfigs": [
-        "board/esp32s3-builtin.cfg"
-    ],
-    "idf.pythonInstallPath": "/opt/esp/python_env/idf5.0_py3.8_env/bin/python"
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.intelliSenseEngine": "tag",
+  "C_Cpp.errorSquiggles": "disabled",
+  "[markdown]": {
+    "editor.wordWrap": "on"
+  },
+  "markdownlint.config": {
+    "MD040": false,
+    "MD041": false
+  }
 }

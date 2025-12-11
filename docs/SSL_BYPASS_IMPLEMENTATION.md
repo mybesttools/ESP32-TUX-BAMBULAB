@@ -175,6 +175,7 @@ This implementation follows the exact pattern used by the mature Home Assistant 
 ### When SSL Bypass is Safe
 
 ✅ **Use on trusted networks**:
+
 - Home WiFi with WPA2/WPA3 encryption
 - Isolated printer VLAN
 - Private networks with no untrusted devices
@@ -182,6 +183,7 @@ This implementation follows the exact pattern used by the mature Home Assistant 
 ### When to Use Certificate Verification
 
 🔒 **Use certificates for**:
+
 - Public/shared networks
 - Enterprise environments
 - Compliance requirements
@@ -228,6 +230,7 @@ mqtt_cfg.broker.verification.certificate = NULL;  // For bypass mode
 ```
 
 Equivalent to Home Assistant's:
+
 ```python
 context = ssl.SSLContext(ssl.PROTOCOL_TLS)
 context.check_hostname = False
@@ -264,8 +267,8 @@ context.verify_mode = ssl.CERT_NONE
 
 ## References
 
-- **Home Assistant Integration**: https://github.com/greghesp/ha-bambulab
-- **ESP-IDF MQTT**: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/protocols/mqtt.html
+- **Home Assistant Integration**: <https://github.com/greghesp/ha-bambulab>
+- **ESP-IDF MQTT**: <https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/protocols/mqtt.html>
 - **Bambu Lab MQTT Protocol**: Username `bblp`, port `8883`, topic `device/{SERIAL}/report`
 
 ---

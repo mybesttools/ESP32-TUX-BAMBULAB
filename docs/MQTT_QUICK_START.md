@@ -15,10 +15,12 @@ This will scan your network and find Bambu printers automatically.
 ```
 
 **Get these from printer:**
+
 - **Access Code:** Settings → Network → MQTT → Access Code
 - **Serial Number:** Settings → Device → Serial Number
 
 **Example:**
+
 ```bash
 ./scripts/test_mqtt.py 192.168.1.100 12345678 01234567890ABCD --no-verify
 ```
@@ -53,6 +55,7 @@ idf.py -p /dev/tty.usbserial-* flash monitor
 ## 5. Expected Behavior
 
 **Startup logs:**
+
 ```
 I BambuHelper: Using printer: My X1C at 192.168.1.100
 I BambuMonitor: Bambu Monitor configured
@@ -62,6 +65,7 @@ I BambuMonitor: Subscribed to device/+/report
 ```
 
 **Query logs (when button pressed):**
+
 ```
 I BambuMonitor: Sending pushall query to device/01234567890ABCD/request
 I BambuMonitor: Query sent successfully

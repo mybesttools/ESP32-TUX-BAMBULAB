@@ -3,6 +3,7 @@
 ## What Was Implemented
 
 Complete multilingual support for the ESP32-TUX web configuration interface in **5 languages**:
+
 - English (en) - Default
 - German (de)
 - Dutch (nl)  
@@ -101,14 +102,14 @@ Each language includes translations for:
 
 ### Documentation Created
 
-2. **docs/WEB_UI_I18N.md** - Complete i18n implementation guide
+1. **docs/WEB_UI_I18N.md** - Complete i18n implementation guide
    - Architecture overview
    - Translation key reference
    - HTML/JavaScript integration patterns
    - Testing procedures
    - Future enhancements
 
-3. **docs/FONT_GENERATION.md** - Cyrillic font generation guide
+2. **docs/FONT_GENERATION.md** - Cyrillic font generation guide
    - Step-by-step LVGL font converter instructions
    - Character range specifications
    - CLI automation commands
@@ -184,11 +185,13 @@ If still not found: return 'brightness' (the key itself)
 ### Known Limitations
 
 ⚠️ **Device LCD fonts lack Cyrillic glyphs**
+
 - Russian text shows as `?????` on device display
 - Web UI shows Russian correctly (uses system fonts)
 - **Solution**: Generate new fonts with Cyrillic range (see `FONT_GENERATION.md`)
 
 ⚠️ **Some help text not translated**
+
 - SSL verification checkbox label (English only)
 - A1 Mini serial number warning (English only)
 - **Reason**: These are technical/rare warnings, low priority
@@ -228,6 +231,7 @@ All translations were generated with attention to:
 ✅ **Brevity** - Fits in UI space without wrapping  
 
 Examples:
+
 - English: "Brightness:" → German: "Helligkeit:" (not "Luminosität")
 - English: "Printer Code" → Russian: "Код принтера" (not "Печать код")
 - English: "Location added!" → Dutch: "Locatie toegevoegd!" (not "Plaats toegevoegd")
@@ -235,18 +239,21 @@ Examples:
 ## Impact Assessment
 
 ### Binary Size
+
 - **Translation data**: ~10KB (embedded in HTML string)
 - **JavaScript code**: ~2KB (translation functions)
 - **Total impact**: ~12KB additional flash usage
 - **Acceptable on**: All devices (4MB, 8MB, 16MB)
 
 ### Runtime Performance
+
 - **Page load**: +5-10ms for language restore and translation
 - **Language switch**: ~10-20ms for translatePage() execution
 - **Memory**: ~15KB heap for translation object
 - **Impact**: Negligible, unnoticeable to users
 
 ### Maintainability
+
 - **Single source**: All translations in WebServer.cpp
 - **Easy updates**: Add key to all 5 languages, add data-i18n attribute
 - **Clear patterns**: Documented in WEB_UI_I18N.md

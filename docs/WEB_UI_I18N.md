@@ -3,8 +3,9 @@
 ## Overview
 
 The ESP32-TUX web configuration interface now supports full internationalization in 5 languages:
+
 - English (en)
-- German (de) 
+- German (de)
 - Dutch (nl)
 - Polish (pl)
 - Russian (ru)
@@ -175,14 +176,14 @@ de: {
 // ... repeat for nl, pl, ru
 ```
 
-2. **Add `data-i18n` attribute to HTML elements**:
+1. **Add `data-i18n` attribute to HTML elements**:
 
 ```html
 <label data-i18n="newFeature">New Feature Label:</label>
 <button onclick="doThing()" data-i18n="newButton">Click Me</button>
 ```
 
-3. **Use `t()` function for dynamic messages**:
+1. **Use `t()` function for dynamic messages**:
 
 ```javascript
 showStatus('statusDiv', t('newFeature') + ' completed!', true);
@@ -218,12 +219,14 @@ showStatus('statusDiv', t('newFeature') + ' completed!', true);
 ## Language Dropdown Behavior
 
 The language selector in the web UI:
+
 - Saves selection to device configuration (persisted to settings.json)
 - Saves selection to browser localStorage (immediate UI update)
 - Changes language instantly without page reload
 - Updates all text elements via `translatePage()`
 
 **Important**: The language setting affects BOTH:
+
 1. Web UI language (via JavaScript i18n)
 2. Device UI language (via `settings.json` → `SettingsConfig` → `TR()` macro)
 

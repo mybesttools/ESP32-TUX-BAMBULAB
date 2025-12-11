@@ -48,6 +48,7 @@ idf.py monitor -p /dev/cu.SLAB_USBtoUART
 ## Technical Details
 
 **ESP32 Partition Layout:**
+
 ```
 0x1000:   Bootloader (8 KB)
 0x8000:   Partition Table (4 KB)
@@ -67,23 +68,26 @@ idf.py -p /dev/cu.SLAB_USBtoUART flash
 ```
 
 This will:
+
 - Erase all partitions including SPIFFS
 - Flash fresh firmware with default settings
 
 ## Troubleshooting
 
 **Port not found?**
+
 ```bash
 # List available ports
 ls /dev/tty.* /dev/cu.*
 ```
 
 **Permission denied?**
+
 ```bash
 chmod +x flash_quick.sh
 ```
 
 **Settings still lost?**
+
 - Make sure you're using `./flash_quick.sh` (not `idf.py flash`)
 - Check that SPIFFS partition exists: `idf.py partition_table-list`
-

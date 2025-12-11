@@ -3,6 +3,7 @@
 ## Overview
 
 The ESP32-TUX now features an interactive carousel/slider display on the home page that shows:
+
 - **Multiple weather locations** - Each with local time, city, country, and current conditions
 - **Printer status cards** - Each configured printer displays status, temperature, and progress
 - **Touch-friendly navigation** - Swipe horizontally to navigate between slides
@@ -13,6 +14,7 @@ The ESP32-TUX now features an interactive carousel/slider display on the home pa
 ### Components
 
 #### 1. CarouselWidget (`main/widgets/carousel_widget.hpp`)
+
 Header-only widget class that manages the carousel display:
 
 ```cpp
@@ -31,6 +33,7 @@ public:
 ```
 
 **Slide Structure:**
+
 ```cpp
 struct carousel_slide_t {
     std::string title;           // Location/Printer name
@@ -43,6 +46,7 @@ struct carousel_slide_t {
 ```
 
 #### 2. SettingsConfig Extensions (`components/SettingsConfig/`)
+
 New methods for managing weather locations and printers:
 
 ```cpp
@@ -61,6 +65,7 @@ int get_printer_count();
 ```
 
 **Data Structures:**
+
 ```cpp
 struct weather_location_t {
     std::string name;        // Display name (e.g., "Home", "Office")
@@ -85,7 +90,7 @@ The home page (`create_page_home()` in `main/gui.hpp`) now creates and manages t
 
 1. **Initialization**: Carousel created on first page load
 2. **Slide Population**: `update_carousel_slides()` populates from SettingsConfig
-3. **Layout**: 
+3. **Layout**:
    - Carousel container: 480×250px (full width, reduced height for footer)
    - Scrollable slides area: 480×200px (horizontal scrolling)
    - Page indicator: 480×40px (bottom with dots)
@@ -93,6 +98,7 @@ The home page (`create_page_home()` in `main/gui.hpp`) now creates and manages t
 ### Visual Design
 
 **Slide Styling:**
+
 - Dark background theme (0x1e1e1e)
 - Weather slides: Blue background (0x1e3a5f)
 - Printer slides: Purple background (0x3a1e2f)
@@ -102,6 +108,7 @@ The home page (`create_page_home()` in `main/gui.hpp`) now creates and manages t
 - Secondary value: Light gray (0xcccccc), 16pt font
 
 **Page Indicators:**
+
 - Dots at bottom showing current slide position
 - Active dot: Orange (0xffa500)
 - Inactive dots: Gray (0x666666)
@@ -112,6 +119,7 @@ The home page (`create_page_home()` in `main/gui.hpp`) now creates and manages t
 ### Adding Weather Locations
 
 **Via Code (in main.cpp):**
+
 ```cpp
 cfg->add_weather_location("Home", "Kleve", "Germany", 51.7934f, 6.1368f);
 cfg->add_weather_location("Office", "Berlin", "Germany", 52.5200f, 13.4050f);
@@ -119,7 +127,8 @@ cfg->save_config();
 ```
 
 **Via Web UI:**
-1. Navigate to http://esp32-tux.local
+
+1. Navigate to <http://esp32-tux.local>
 2. Go to "Weather Settings"
 3. Click "Add Location"
 4. Enter city name, coordinates
@@ -128,13 +137,15 @@ cfg->save_config();
 ### Adding Printers
 
 **Via Code:**
+
 ```cpp
 cfg->add_printer("Bambu Lab X1", "192.168.1.100", "your_token_here");
 cfg->save_config();
 ```
 
 **Via Web UI:**
-1. Navigate to http://esp32-tux.local
+
+1. Navigate to <http://esp32-tux.local>
 2. Go to "Printer Management"
 3. Click "Add Printer"
 4. Enter printer name, IP, authentication token
@@ -187,7 +198,9 @@ All weather locations and printers are stored in `/spiffs/settings.json` with fo
 ## Integration with Weather & Printer Data
 
 ### Weather Updates
+
 The carousel slide values are placeholder-populated with:
+
 - Title: Location name
 - Subtitle: Country
 - Value1: "24°C" (will update from OpenWeatherMap API)
@@ -196,7 +209,9 @@ The carousel slide values are placeholder-populated with:
 Future enhancement: Wire `MSG_WEATHER_CHANGED` LVGL message to update carousel slides in real-time.
 
 ### Printer Status Updates
+
 Similar placeholders for printer slides:
+
 - Title: Printer name
 - Subtitle: "Status: Idle" (updates from BambuMonitor)
 - Value1: "0%" (print progress)
@@ -207,11 +222,13 @@ Future enhancement: Subscribe to `MSG_BAMBU_*` messages to update printer status
 ## Touch Interaction
 
 **Horizontal Swipe:**
+
 - Swipe left to go to next slide
 - Swipe right to go to previous slide
 - Slides wrap around (last → first, first → last)
 
 **Visual Feedback:**
+
 - Page indicator dots update to show current position
 - Smooth scroll animation to target slide (LV_ANIM_ON)
 
@@ -227,6 +244,7 @@ Maximum total slides: 10 (5 locations + 5 printers)
 ## Default Initialization
 
 On first boot, if no weather locations exist, the system initializes:
+
 1. **Home** - Kleve, Germany (51.7934°, 6.1368°)
 2. **Reference** - Amsterdam, Netherlands (52.3676°, 4.9041°)
 
@@ -255,16 +273,19 @@ These can be modified via web UI or code.
 ## Troubleshooting
 
 ### Carousel Not Showing
+
 - Check SettingsConfig initialization: `cfg->get_weather_location_count()`
 - Verify carousel widget is created: `if (carousel_widget) { ... }`
 - Check SPIFFS has enough space for slides (no image data needed currently)
 
 ### Slides Not Updating
+
 - Ensure `update_carousel_slides()` is called after adding locations
 - Check LVGL task is running and carousel_widget is thread-safe
 - Verify `cfg` pointer is valid when populating slides
 
 ### Touch Navigation Issues
+
 - Ensure parent container has proper size/position
 - Check `lv_obj_set_scroll_dir()` allows LV_DIR_HOR
 - Verify scroll event callback is properly registered
@@ -276,4 +297,3 @@ These can be modified via web UI or code.
 - **SettingsConfig**: `components/SettingsConfig/include/SettingsConfig.hpp`
 - **Implementation**: `components/SettingsConfig/SettingsConfig.cpp`
 - **Initialization**: `main/main.cpp` ~lines 285-295
-

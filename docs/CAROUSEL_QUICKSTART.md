@@ -22,8 +22,8 @@ The **orange dots** at the bottom show:
 
 **Via Web Interface:**
 
-1. Open http://esp32-tux.local in a browser
-2. Click "Weather Settings" 
+1. Open <http://esp32-tux.local> in a browser
+2. Click "Weather Settings"
 3. Click "Add Location"
 4. Enter location name (e.g., "Paris")
 5. Click "Search" to find city coordinates (future feature)
@@ -40,7 +40,7 @@ The **orange dots** at the bottom show:
 
 **Via Web Interface:**
 
-1. Open http://esp32-tux.local
+1. Open <http://esp32-tux.local>
 2. Click "Printer Management"
 3. Click "Add Printer"
 4. Enter printer name (e.g., "Bambu Lab X1")
@@ -148,7 +148,7 @@ Rebuild and flash to apply changes.
 ### The carousel is blank / shows "Welcome"
 
 - You probably haven't added any weather locations or printers
-- Use the web interface at http://esp32-tux.local to add some
+- Use the web interface at <http://esp32-tux.local> to add some
 - Or check the device console for error messages
 
 ### Can't swipe between slides
@@ -161,23 +161,26 @@ Rebuild and flash to apply changes.
 
 - This is normal for now - data is static placeholders
 - Real-time updates coming in next phase
-- Check http://esp32-tux.local → Weather Settings to verify API key
+- Check <http://esp32-tux.local> → Weather Settings to verify API key
 
 ## Web Interface
 
-Access full configuration and status at **http://esp32-tux.local**:
+Access full configuration and status at **<http://esp32-tux.local>**:
 
 ### Weather Settings
+
 - Add/remove/edit weather locations
 - Set OpenWeatherMap API key
 - Validate coordinates with map view (coming soon)
 
 ### Printer Management  
+
 - Add/remove printers
 - Test MQTT connection
 - View printer status history (coming soon)
 
 ### System Settings
+
 - Adjust screen brightness
 - Set timezone
 - View device information
@@ -185,10 +188,10 @@ Access full configuration and status at **http://esp32-tux.local**:
 ## Need Help?
 
 Check these files for more info:
+
 - **CAROUSEL_FEATURE.md** - Detailed technical documentation
 - **README.md** - General ESP32-TUX information
 - **BAMBU_QUICKSTART.md** - Bambu printer setup
 - **BAMBU_TECHNICAL_DESIGN.md** - Printer integration details
 
 Happy monitoring! 🚀
-

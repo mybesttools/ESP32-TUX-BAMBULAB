@@ -3,10 +3,12 @@
 ## Problem Statement
 
 The ESP32-TUX device UI currently uses `font_montserrat_pl_*` fonts that include:
+
 - **Basic Latin**: U+0020-U+007F (English)
 - **Latin Extended-A**: U+0100-U+017F (Polish characters: ą, ć, ę, ł, ń, ó, ś, ź, ż)
 
 To support Russian language (`ru` locale), we need to add:
+
 - **Cyrillic**: U+0400-U+04FF (Russian alphabet and extended characters)
 
 ## Required Fonts
@@ -48,6 +50,7 @@ In the "Range" section, add these ranges (one per line):
 ```
 
 Explanation:
+
 - `0x20-0x7F`: Basic Latin (A-Z, a-z, 0-9, punctuation)
 - `0x100-0x17F`: Latin Extended-A (ą, ć, ę, ł, ń, ó, ś, ź, ż for Polish)
 - `0x400-0x4FF`: Cyrillic (А-Я, а-я, Ё, ё, etc. for Russian)
@@ -70,6 +73,7 @@ Explanation:
 ### Step 6: Repeat for All Sizes
 
 Generate 4 files total:
+
 - `font_montserrat_14.c` (Size: 14)
 - `font_montserrat_16.c` (Size: 16)
 - `font_montserrat_24.c` (Size: 24)
@@ -121,6 +125,7 @@ lv_font_conv --no-compress --no-prefilter --bpp 4 --size 32 \
 ```
 
 **Options explained**:
+
 - `--no-compress`: Faster rendering (important for ESP32)
 - `--no-prefilter`: Faster rendering
 - `--bpp 4`: 4 bits per pixel (16 gray levels)
@@ -184,10 +189,12 @@ grep -r "font_montserrat_pl" .
 ```
 
 Replace instances like:
+
 - `&font_montserrat_pl_16` → `&font_montserrat_16`
 - `font_montserrat_pl_14` → `font_montserrat_14`
 
 Key locations to check:
+
 - `main/gui.hpp`: Font assignments for labels, buttons
 - `main/pages/*.hpp`: Any page-specific font usage
 - `main/widgets/*.hpp`: Custom widget fonts
@@ -239,6 +246,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 ### Expected Results
 
 Before (Polish fonts only):
+
 ```
 Настройки      → ????????
 Температура    → ????????????
@@ -246,6 +254,7 @@ Before (Polish fonts only):
 ```
 
 After (with Cyrillic):
+
 ```
 Настройки      → Настройки       (Settings)
 Температура    → Температура     (Temperature)
@@ -259,6 +268,7 @@ After (with Cyrillic):
 **Cause**: Font files not added to CMakeLists.txt or named incorrectly.
 
 **Solution**:
+
 1. Verify files exist in `main/fonts/`
 2. Check `main/CMakeLists.txt` includes them in `COMPONENT_SRCS`
 3. Ensure filenames match exactly (case-sensitive)
@@ -269,6 +279,7 @@ After (with Cyrillic):
 **Cause**: Fonts don't include Cyrillic range or translation strings missing.
 
 **Solution**:
+
 1. Check font was generated with `0x400-0x4FF` range
 2. Verify `main/i18n/lang.hpp` has Russian translations
 3. Confirm language set to `ru` in settings
@@ -279,6 +290,7 @@ After (with Cyrillic):
 **Cause**: All 4 fonts + Cyrillic characters exceed flash partition.
 
 **Solution**:
+
 1. Use 4MB partition table → 8MB partition table
 2. Reduce font sizes (use only 14pt and 16pt)
 3. Lower bpp from 4 to 2 (smaller but less smooth)
@@ -289,6 +301,7 @@ After (with Cyrillic):
 **Cause**: bpp setting too low.
 
 **Solution**:
+
 1. Regenerate with `--bpp 4` (or higher if flash space available)
 2. Use `--no-compress` for faster rendering
 3. Consider using font_montserrat-Medium.ttf for better rendering
@@ -325,14 +338,17 @@ Full Cyrillic range recommended for compatibility with Ukrainian, Belarusian, et
 ## Flash Size Recommendations
 
 ### 4MB Flash (WT32-SC01)
+
 - **Status**: May be tight with all 4 fonts + Cyrillic
 - **Recommendation**: Use 14pt and 16pt only, or switch to 8MB device
 
 ### 8MB Flash (WT32-SC01 Plus)  
+
 - **Status**: Plenty of space
 - **Recommendation**: Use all 4 fonts with full Cyrillic range
 
 ### 16MB Flash (Makerfabs ESP32S3)
+
 - **Status**: Abundant space
 - **Recommendation**: Use all fonts, consider adding more languages
 
@@ -341,16 +357,19 @@ Full Cyrillic range recommended for compatibility with Ukrainian, Belarusian, et
 If Montserrat doesn't meet requirements:
 
 ### Roboto
+
 - **Source**: <https://fonts.google.com/specimen/Roboto>
 - **Pros**: Very readable, good Cyrillic coverage
 - **Cons**: Less stylish than Montserrat
 
 ### Open Sans
+
 - **Source**: <https://fonts.google.com/specimen/Open+Sans>
 - **Pros**: Excellent readability, wide language support
 - **Cons**: Larger file size
 
 ### Liberation Sans
+
 - **Source**: <https://github.com/liberationfonts/liberation-fonts>
 - **Pros**: Compact, good screen rendering
 - **Cons**: Less modern aesthetic

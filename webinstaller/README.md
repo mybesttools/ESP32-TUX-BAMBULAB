@@ -22,17 +22,20 @@ Browser-based firmware installer for ESP32-TUX BambuLab Monitor. No software ins
 
 ### Troubleshooting
 
-**"No serial port found"**
+#### "No serial port found"
+
 - Try a different USB cable (must be data cable, not charge-only)
 - Install USB drivers:
   - [CP210x Driver](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) (most common)
   - [CH340 Driver](https://www.wch-ic.com/downloads/CH341SER_ZIP.html)
 
-**"Failed to connect"**
+#### "Failed to connect"
+
 - Hold the BOOT button while clicking Install
 - Try unplugging and replugging the device
 
-**Browser not supported**
+#### Browser not supported
+
 - Use Chrome or Edge on desktop (not mobile, not Firefox/Safari)
 
 ## For Developers
@@ -58,6 +61,7 @@ python3 -m http.server 8080
 ### Deploying
 
 Upload the entire `webinstaller/` folder to any static web hosting:
+
 - GitHub Pages
 - Netlify
 - Vercel
@@ -110,6 +114,7 @@ Each device needs a manifest JSON file that tells ESP Web Tools how to flash:
 ```
 
 **Important offsets:**
+
 - ESP32: bootloader at `0x1000` (4096)
 - ESP32-S3: bootloader at `0x0`
 - Partition table: `0x8000` (32768)

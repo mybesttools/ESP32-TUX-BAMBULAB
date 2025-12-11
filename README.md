@@ -65,6 +65,7 @@ The **WT32-SC01 Plus** is recommended — it's compact, affordable, and works gr
 
 1. Download `ESP32-TUX.bin` from [Latest Release](https://github.com/mybesttools/ESP32-TUX-BAMBULAB/releases/latest)
 2. Flash using esptool or ESP-IDF:
+
    ```bash
    esptool.py --port /dev/cu.usbmodem* write_flash 0x0 ESP32-TUX.bin
    ```
@@ -209,6 +210,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines *(coming soon)*.
 This project is a fork with Bambu Lab integration, maintained by [Mike van der Sluis](https://github.com/mybesttools).
 
 **Libraries:**
+
 - [LovyanGFX](https://github.com/lovyan03/LovyanGFX) — Display driver
 - [LVGL 8.x](https://github.com/lvgl/lvgl) — UI framework
 - [ESP-IDF](https://github.com/espressif/esp-idf) — Espressif framework
